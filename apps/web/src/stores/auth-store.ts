@@ -29,6 +29,35 @@ function webLocalStorage(): Storage {
   }
 }
 
+/** Corrupt persisted JSON → persist hydration kabhi complete nahi hoti → poori app white screen. */
+function safeWebStorageForPersist(): Storage {
+  const inner = webLocalStorage();
+  return {
+    get length() {
+      return inner.length;
+    },
+    clear: () => inner.clear(),
+    key: (i) => inner.key(i),
+    getItem: (key: string) => {
+      try {
+        const v = inner.getItem(key);
+        if (v == null) return null;
+        JSON.parse(v);
+        return v;
+      } catch {
+        try {
+          inner.removeItem(key);
+        } catch {
+          /* ignore */
+        }
+        return null;
+      }
+    },
+    setItem: (k, v) => inner.setItem(k, v),
+    removeItem: (k) => inner.removeItem(k),
+  } as Storage;
+}
+
 export type UserInfo = {
   id: string;
   email: string;
@@ -59,7 +88,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "gdms-auth",
-      storage: createJSONStorage(webLocalStorage),
+      storage: createJSONStorage(() => safeWebStorageForPersist()),
       partialize: (state) => ({ accessToken: state.accessToken, user: state.user }),
       /** Late rehydrate purana khali snapshot na aaye; live memory (abhi login) ko precedence. */
       merge: (persisted, current) => {
