@@ -1,0 +1,25 @@
+{
+  "name": "@gdms/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --watch --env-file=.env --import tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@gdms/auth": "workspace:*",
+    "@gdms/database": "workspace:*",
+    "@gdms/logger": "workspace:*",
+    "@gdms/shared": "workspace:*",
+    "@gdms/workflow-engine": "workspace:*",
+    "bullmq": "^5.34.5",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,95 @@
+"use client";
+
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useLiveStore } from "@/stores/live-store";
+import { useAuthStore } from "@/stores/auth-store";
+import { apiFetch } from "@/lib/api";
+
+export function OtpModal() {
+  const otpOpen = useLiveStore((s) => s.otpOpen);
+  const otpRunId = useLiveStore((s) => s.otpRunId);
+  const closeOtp = useLiveStore((s) => s.closeOtp);
+  const token = useAuthStore((s) => s.accessToken);
+  const [otp, setOtp] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  async function submit(): Promise<void> {
+    const code = otp.replace(/\s+/g, "").trim();
+    if (!token || !otpRunId) {
+      setErr("Session / run id missing — Live session kholo ya dubara login karo.");
+      return;
+    }
+    if (code.length < 4) {
+      setErr("OTP kam az kam 4 characters.");
+      return;
+    }
+    setErr(null);
+    setOkMsg(null);
+    setPending(true);
+    try {
+      await apiFetch(`/v1/workflow-runs/${otpRunId}/otp`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({ otp: code }),
+      });
+      setOkMsg(
+        "API ne OTP Redis tak bhej diya — automation ab GDMS par OTP bhar ke aage badhega. Live session / logs dekho.",
+      );
+      await new Promise((r) => setTimeout(r, 900));
+      closeOtp();
+      setOtp("");
+      setOkMsg(null);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={otpOpen}
+      onOpenChange={(o) => {
+        if (!o && !pending) {
+          closeOtp();
+          setErr(null);
+          setOkMsg(null);
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogTitle>GDMS OTP</DialogTitle>
+        <p className="text-sm text-zinc-600">
+          Wo OTP daalen jo GDMS ne SMS / email par bheja ho. Submit ke baad Playwright wahi value
+          GDMS form mein fill karega.
+        </p>
+        <Input
+          placeholder="6-digit OTP"
+          value={otp}
+          onChange={(e) => setOtp(e.target.value)}
+          disabled={pending}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !pending) void submit();
+          }}
+        />
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        {okMsg && <p className="text-sm text-green-700">{okMsg}</p>}
+        <DialogFooter>
+          <Button onClick={() => void submit()} disabled={pending}>
+            {pending ? "Bhej rahe hain…" : "Submit OTP"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

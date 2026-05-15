@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Dev-friendly HTTP (LAN / emulator). Prod: prefer HTTPS + optional certificate pinning below. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <!--
+    Example (enable without comment wrapper in a release flavor):
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">api.yourdomain.com</domain>
+        <pin-set expiration="2027-01-01">
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+        </pin-set>
+    </domain-config>
+    -->
+</network-security-config>

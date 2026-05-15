@@ -1,0 +1,24 @@
+{
+  "name": "@gdms/ai-service",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --watch --env-file=.env --import tsx src/server.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@gdms/database": "workspace:*",
+    "@gdms/shared": "workspace:*",
+    "fastify": "^5.2.1",
+    "@fastify/multipart": "^9.0.1",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

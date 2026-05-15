@@ -1,0 +1,34 @@
+{
+  "name": "@gdms/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --watch --env-file=.env --import tsx src/server.ts",
+    "start": "node dist/server.js",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^10.0.1",
+    "@gdms/auth": "workspace:*",
+    "@gdms/database": "workspace:*",
+    "@gdms/logger": "workspace:*",
+    "@gdms/shared": "workspace:*",
+    "@gdms/workflow-engine": "workspace:*",
+    "@prisma/client": "^6.2.1",
+    "bullmq": "^5.34.5",
+    "fastify": "^5.2.1",
+    "ioredis": "^5.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

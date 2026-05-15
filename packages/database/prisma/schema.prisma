@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  DEALER
+  USER
+}
+
+enum WorkflowRunStatus {
+  PENDING
+  RUNNING
+  PAUSED_OTP
+  PAUSED_USER
+  COMPLETED
+  FAILED
+  STOPPED
+}
+
+enum LeadCategory {
+  HOT
+  WARM
+  FAKE
+  NEED_CALL
+}
+
+enum VoiceProfileStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+enum AndroidDeviceStatus {
+  OFFLINE
+  ONLINE
+  BUSY
+}
+
+model Dealer {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+  gdms      GdmsAccount?
+  inquiries Inquiry[]
+  workflows DealerWorkflow[]
+  runs      WorkflowRun[]
+  devices   AndroidDevice[]
+  voiceProfiles VoiceProfile[]
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  role          UserRole
+  dealerId      String?
+  dealer        Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  tokenVersion  Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  voiceProfiles VoiceProfile[]
+}
+
+model GdmsAccount {
+  id                 String   @id @default(cuid())
+  dealerId           String   @unique
+  dealer             Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  usernameCipher     String
+  passwordCipher     String
+  keyVersion         String   @default("v1")
+  usernameFingerprint String
+  lastVerifiedAt     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model DealerWorkflow {
+  id          String   @id @default(cuid())
+  dealerId    String
+  dealer      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  name        String
+  version     String   @default("1")
+  definition  Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([dealerId, name, version])
+  @@index([dealerId])
+}
+
+model Inquiry {
+  id            String       @id @default(cuid())
+  dealerId      String
+  dealer        Dealer       @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  externalKey   String?
+  phone         String
+  name          String?
+  status        String?
+  category      LeadCategory @default(WARM)
+  aiSummary     Json?
+  gdmsPayload   Json?
+  followUpNotes String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  logs          InquiryLog[]
+  aiCalls       AiCall[]
+
+  @@index([dealerId, phone])
+  @@index([dealerId, category])
+}
+
+model InquiryLog {
+  id         String   @id @default(cuid())
+  inquiryId  String
+  inquiry    Inquiry  @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  type       String
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([inquiryId])
+}
+
+model WorkflowRun {
+  id               String              @id @default(cuid())
+  dealerId         String
+  dealer           Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  status           WorkflowRunStatus   @default(PENDING)
+  currentStep      String?
+  browserSessionKey String?
+  errorMessage     String?
+  startedAt        DateTime            @default(now())
+  endedAt          DateTime?
+  aiCalls          AiCall[]
+
+  @@index([dealerId, startedAt])
+}
+
+model AiCall {
+  id               String           @id @default(cuid())
+  inquiryId        String
+  inquiry          Inquiry          @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  workflowRunId    String?
+  workflowRun      WorkflowRun?     @relation(fields: [workflowRunId], references: [id], onDelete: SetNull)
+  stateMachine     Json
+  androidDeviceId  String?
+  androidDevice    AndroidDevice?   @relation(fields: [androidDeviceId], references: [id], onDelete: SetNull)
+  voiceProfileId   String?
+  voiceProfile     VoiceProfile?    @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
+  outcome          String?
+  /** Last SIM / telephony phase reported by Android gateway */
+  lastCallPhase    String?
+  callEndedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  logs             CallLog[]
+}
+
+model CallLog {
+  id         String   @id @default(cuid())
+  aiCallId   String
+  aiCall     AiCall   @relation(fields: [aiCallId], references: [id], onDelete: Cascade)
+  phase      String
+  transcript String?
+  metrics    Json?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([aiCallId])
+}
+
+model AndroidDevice {
+  id              String              @id @default(cuid())
+  dealerId        String
+  dealer          Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  deviceId        String              @unique
+  pairingCodeHash String
+  /** bcrypt hash; empty until device completes pairing (Phase 2) */
+  socketTokenHash String              @default("")
+  status          AndroidDeviceStatus @default(OFFLINE)
+  capabilities    Json?
+  lastSeenAt      DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  aiCalls         AiCall[]
+
+  @@index([dealerId])
+}
+
+model VoiceProfile {
+  id          String              @id @default(cuid())
+  dealerId    String
+  dealer      Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  artifactPath String
+  modelVersion String             @default("1")
+  status       VoiceProfileStatus  @default(PENDING)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  aiCalls      AiCall[]
+
+  @@index([dealerId])
+}

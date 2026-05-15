@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+.turbo
+.env
+.env.local
+*.log
+playwright-report
+test-results
+android/**/.gradle
+android/**/build
+android/**/.idea
+packages/database/prisma/migrations/**/migration_lock.toml.bak
+/data
+apps/automation-service/data/
