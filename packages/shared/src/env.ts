@@ -95,12 +95,16 @@ export const automationEnvSchema = z.object({
     .string()
     .default("true")
     .transform((s) => s === "true" || s === "1"),
+  /**
+   * UI pacing scale: 1.0 = baseline, ~0.65 = faster but even (use with pause tiers in human-delay).
+   */
+  GDMS_SPEED_MULTIPLIER: z.coerce.number().min(0.25).max(1.5).default(0.65),
   /** Short hover / micro-pauses between clicks (enquiry transfer humanization). */
-  GDMS_MICRO_DELAY_MIN_MS: z.coerce.number().default(300),
-  GDMS_MICRO_DELAY_MAX_MS: z.coerce.number().default(1500),
-  /** Min delay (ms) between UI actions during enquiry transfer. */
-  GDMS_ACTION_DELAY_MIN_MS: z.coerce.number().default(2000),
-  GDMS_ACTION_DELAY_MAX_MS: z.coerce.number().default(6000),
+  GDMS_MICRO_DELAY_MIN_MS: z.coerce.number().default(120),
+  GDMS_MICRO_DELAY_MAX_MS: z.coerce.number().default(280),
+  /** Legacy fallback when humanDelay() is called without args. */
+  GDMS_ACTION_DELAY_MIN_MS: z.coerce.number().default(500),
+  GDMS_ACTION_DELAY_MAX_MS: z.coerce.number().default(750),
   /** Random interval between Search clicks while hunting for a matching enquiry. */
   GDMS_SEARCH_INTERVAL_MIN_MS: z.coerce.number().default(20_000),
   GDMS_SEARCH_INTERVAL_MAX_MS: z.coerce.number().default(45_000),

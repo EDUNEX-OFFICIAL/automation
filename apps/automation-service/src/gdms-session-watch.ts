@@ -12,7 +12,7 @@ import {
 } from "./gdms-dom-discovery.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import { setAutomationInputBypass } from "./automation-browser-setup.js";
-import { humanCarIconClick, humanDelay } from "./human-delay.js";
+import { humanCarIconClick, humanDelay, pollDelay } from "./human-delay.js";
 import { persistLastActiveRun } from "./last-active-run.js";
 
 const DEFAULT_TIMEOUT_PATTERNS = [
@@ -687,7 +687,7 @@ export async function waitForGdmsDashboardReady(
       await log("info", `Still waiting for dashboard — ${blockers}`);
     }
 
-    await new Promise((r) => setTimeout(r, DASHBOARD_POLL_MS));
+    await pollDelay(DASHBOARD_POLL_MS);
   }
   throw new Error(DASHBOARD_READY_ERROR);
 }
@@ -742,7 +742,7 @@ async function waitForFlyoutAfterCarClick(page: Page, maxMs = 15_000): Promise<b
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     if (await flyoutShowsCustomerEnquiryMgt(page)) return true;
-    await new Promise((r) => setTimeout(r, 450));
+    await pollDelay(450);
   }
   return false;
 }
@@ -951,7 +951,7 @@ export async function waitForCustomerEnquiryTreeExpanded(
       await log("info", "Customer Enquiry menu tree expanded.");
       return;
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await pollDelay(500);
   }
   throw new Error("Customer Enquiry menu tree did not expand after Customer Enquiry Mgt");
 }
@@ -1159,6 +1159,6 @@ export async function watchGdmsSession(opts: {
       await maybeHandleExpired("timeout");
     }
 
-    await new Promise((r) => setTimeout(r, WATCH_POLL_MS));
+    await pollDelay(WATCH_POLL_MS);
   }
 }
