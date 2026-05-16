@@ -6,6 +6,44 @@ import {
 } from "@/stores/automation-session-store";
 import { useLiveStore } from "@/stores/live-store";
 
+const IN_FLIGHT_STATUSES = new Set([
+  "PENDING",
+  "RUNNING",
+  "PAUSED_OTP",
+  "PAUSED_USER",
+  "FAILED",
+]);
+
+type WorkflowRunSummary = { id: string; status: string; dealerId?: string };
+
+/** Link Live session to the current automation run (works for super admin without dealerId on JWT). */
+export async function findInFlightWorkflowRunId(token: string): Promise<string | null> {
+  const liveRunId = useLiveStore.getState().runId;
+  if (liveRunId) return liveRunId;
+
+  const byDealer = useAutomationSessionStore.getState().byDealer;
+  for (const saved of Object.values(byDealer)) {
+    if (!saved?.runId) continue;
+    try {
+      const run = await apiFetch<{ status: string }>(`/v1/workflow-runs/${saved.runId}`, { token });
+      if (IN_FLIGHT_STATUSES.has(run.status)) return saved.runId;
+    } catch {
+      /* stale saved id */
+    }
+  }
+
+  const res = await apiFetch<{ run: WorkflowRunSummary | null }>(`/v1/workflow-runs/in-flight`, {
+    token,
+  });
+  return res.run?.id ?? null;
+}
+
+export async function linkLiveSessionToInFlightRun(token: string): Promise<string | null> {
+  const id = await findInFlightWorkflowRunId(token);
+  if (id) useLiveStore.getState().setRun(id);
+  return id;
+}
+
 export function persistAutomationRun(input: {
   runId: string;
   dealerId: string;

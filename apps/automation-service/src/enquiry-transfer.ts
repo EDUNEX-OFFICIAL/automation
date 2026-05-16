@@ -173,10 +173,10 @@ async function clickCustomerEnquiryTreeItem(
     for (const sel of treeSelectors) {
       const link = ctx.locator(sel).first();
       if ((await link.count().catch(() => 0)) < 1) continue;
-      await link.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+      await link.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
       await humanDelay(300, 700);
       try {
-        await link.click({ timeout: 30_000, force: true });
+        await link.click({ timeout: 8_000, force: true });
       } catch {
         await link.evaluate((el) => (el as HTMLElement).click());
       }
@@ -189,7 +189,7 @@ async function clickCustomerEnquiryTreeItem(
   for (const ctx of contexts) {
     const link = ctx.getByRole("link", { name: /^Customer Enquiry$/i }).first();
     if ((await link.count().catch(() => 0)) < 1) continue;
-    await link.click({ timeout: 30_000, force: true });
+    await link.click({ timeout: 9_000, force: true });
     await log("info", "Clicked Customer Enquiry tree link (role fallback).");
     return;
   }
@@ -409,8 +409,8 @@ async function waitForSearchResultsSettle(
   const loader = surface.locator(
     ".k-loading-mask:visible, .k-i-loading:visible, [class*='loading']:visible, [aria-busy='true']",
   );
-  await loader.first().waitFor({ state: "hidden", timeout: 25_000 }).catch(() => {});
-  await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+  await loader.first().waitFor({ state: "hidden", timeout: 9_000 }).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
 
   for (let i = 0; i < 12; i++) {
     const count = await surface.locator("table tbody tr").count();
@@ -539,9 +539,9 @@ async function clickSearchOnPage(
         "Page action Search (#btnSearch) not found — open Sales Customer Enquiry list (Lead tab) with Allocate / + New visible.",
       );
     }
-    await btn.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await btn.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
     await humanDelay(300, 800);
-    await btn.click({ timeout: 30_000, force: true });
+    await btn.click({ timeout: 9_000, force: true });
     await humanDelay(1200, 2800);
     await waitForSearchResultsSettle(ui, page, prevBodyCount);
   } finally {
@@ -721,12 +721,12 @@ async function visiblePinDialog(page: Page): Promise<Locator> {
 /** Double-click row; returns the page that hosts SALES CUSTOMER ENQUIRY INFO (popup or same tab). */
 async function openEnquiryDetailPage(row: Locator): Promise<Page> {
   const listPage = row.page();
-  const popupPromise = listPage.waitForEvent("popup", { timeout: 12_000 }).catch(() => null);
+  const popupPromise = listPage.waitForEvent("popup", { timeout: 6_000 }).catch(() => null);
   await setAutomationInputBypass(listPage, true);
   try {
-    await row.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await row.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
     await humanDelay(400, 900);
-    await row.dblclick({ timeout: 20_000, force: true });
+    await row.dblclick({ timeout: 7_000, force: true });
   } finally {
     await setAutomationInputBypass(listPage, false);
   }
@@ -946,9 +946,9 @@ async function clickPinLookupTrigger(page: Page, log: EnquiryTransferContext["lo
   const usedEvaluate = (await trigger.evaluate((el) => el.id === "pin").catch(() => false)) as boolean;
   if (!usedEvaluate) {
     await withModalInputBypass(modal, async () => {
-      await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+      await trigger.scrollIntoViewIfNeeded({ timeout: 7_000 }).catch(() => {});
       await humanDelay(300, 700);
-      await trigger.click({ timeout: 30_000, force: true });
+      await trigger.click({ timeout: 9_000, force: true });
     });
   } else {
     await log("info", "PIN lookup opened via DOM click beside #pin.");
@@ -1215,7 +1215,7 @@ async function typePinInFilterAndSearch(
 
   await log("info", `PIN popup: typing ${pin} in PIN Code filter field.`);
   const pinInput = await resolvePinCodeInputInDialog(pinDialog, log);
-  await pinInput.waitFor({ state: "visible", timeout: 15_000 });
+  await pinInput.waitFor({ state: "visible", timeout: 5_000 });
 
   await withPageInputBypass(page, async () => {
     await pinInput.click();
@@ -1414,7 +1414,7 @@ async function resolveKendoDropdownTriggerNearLabel(
   if (!labelEl) {
     labelEl = labelEls.first();
   }
-  await labelEl.waitFor({ state: "visible", timeout: 12_000 });
+  await labelEl.waitFor({ state: "visible", timeout: 5_000 });
   const section = labelEl.locator(
     "xpath=ancestor::*[contains(@class,'box_form') or self::tr or self::dl][1]",
   );
@@ -1524,7 +1524,7 @@ async function selectEnquiryTypeColdViaTypeahead(
 ): Promise<boolean> {
   await scrollEnquiryInfoBottomIntoView(modal);
   const trigger = await resolveFollowUpEnquiryTypeTrigger(modal);
-  await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+  await trigger.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => {});
 
   const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
   const kInput = host.locator("span.k-input").first();
@@ -1574,7 +1574,7 @@ async function openKendoDropdownNearLabel(
 ): Promise<void> {
   const formRoot = await enquiryModalFormRoot(modal);
   const trigger = await resolveKendoDropdownTriggerNearLabel(formRoot, label);
-  await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+  await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
   if (log) await log("info", `Opening dropdown for ${String(label)} (Kendo arrow / display).`);
 
   const tryOpen = async (): Promise<boolean> => {
@@ -1690,7 +1690,7 @@ async function scrollEnquiryInfoBottomIntoView(modal: Locator): Promise<void> {
     .locator("motion.div, div.box_form.form_st04, div[class*='form_st04']")
     .last();
   if (await block.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await block.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await block.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
     await humanDelay(400, 800);
   }
 }
@@ -1704,12 +1704,12 @@ async function scrollToEnquiryInfoSection(modal: Locator): Promise<void> {
     .filter({ hasText: /^Enquiry\s*Info\.?$/i })
     .first();
   if (await section.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await section.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await section.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
     await humanDelay(400, 800);
   }
   const tdLabel = formRoot.getByText(/^TD\s*Offer/i).first();
   if (await tdLabel.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await tdLabel.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await tdLabel.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
     await humanDelay(300, 700);
   }
 }
@@ -1718,10 +1718,10 @@ async function scrollKendoFieldIntoView(modal: Locator, label: RegExp): Promise<
   const formRoot = await enquiryModalFormRoot(modal);
   try {
     const trigger = await resolveKendoDropdownTriggerNearLabel(formRoot, label);
-    await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await trigger.scrollIntoViewIfNeeded({ timeout: 7_000 }).catch(() => {});
   } catch {
     const labelEl = formRoot.locator("dt, th, td, label").filter({ hasText: label }).first();
-    await labelEl.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await labelEl.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
   }
   await humanDelay(300, 700);
 }
@@ -2273,7 +2273,7 @@ async function resolveSaveButton(page: Page, preferFinal: boolean): Promise<Loca
 }
 
 async function clickSaveButton(target: Locator, log: EnquiryTransferContext["log"]): Promise<void> {
-  await target.scrollIntoViewIfNeeded({ timeout: 12_000 }).catch(() => {});
+  await target.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
   await humanDelay(300, 700);
   await humanHoverClick(target);
   await humanDelay(400, 900);
@@ -2443,7 +2443,7 @@ async function ensureEnquiryModalOpenForFollowUpSave(
     );
   }
   const modal = await visibleEnquiryModal(page);
-  await modal.waitFor({ state: "visible", timeout: 20_000 });
+  await modal.waitFor({ state: "visible", timeout: 9_000 });
   await ensureFollowUpTabActive(modal);
   await closeDateTimePickerWithoutClosingModal(modal);
   await dismissTransientKendoPopups(page);
@@ -2495,7 +2495,7 @@ async function clickBtnFollowUpSave(page: Page, log: EnquiryTransferContext["log
   await kWindow.evaluate((el) => {
     (el as HTMLElement).scrollTop = 0;
   }).catch(() => {});
-  await saveBtn.scrollIntoViewIfNeeded({ timeout: 12_000 }).catch(() => {});
+  await saveBtn.scrollIntoViewIfNeeded({ timeout: 7_000 }).catch(() => {});
   await humanDelay(300, 600);
 
   const box = await saveBtn.boundingBox();
@@ -2610,7 +2610,7 @@ async function clickVisibleSaveInModal(
   log: EnquiryTransferContext["log"],
   preferFinal = false,
 ): Promise<void> {
-  await visibleEnquiryModal(page).then((m) => m.waitFor({ state: "visible", timeout: 15_000 }));
+  await visibleEnquiryModal(page).then((m) => m.waitFor({ state: "visible", timeout: 4_000 }));
   const target = await resolveSaveButton(page, preferFinal);
   const btnId = (await target.getAttribute("id").catch(() => "")) ?? "";
   if (preferFinal) {
@@ -2735,7 +2735,7 @@ function parseCalendarHeader(text: string): { month: number; year: number } | nu
 
 async function resolveNextFollowUpTimeRow(formRoot: Locator): Promise<Locator> {
   const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Next Follow Up Time/i }).first();
-  await label.waitFor({ state: "visible", timeout: 12_000 });
+  await label.waitFor({ state: "visible", timeout: 4_000 });
   const row = label.locator("xpath=ancestor::tr[1]");
   if (await row.isVisible({ timeout: 1_000 }).catch(() => false)) return row;
   const dl = label.locator("xpath=ancestor::dl[1]");
@@ -2918,7 +2918,7 @@ async function setNextFollowUpTime(
   );
 
   const row = await resolveNextFollowUpTimeRow(formRoot);
-  await row.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+  await row.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
 
   await withModalInputBypass(modal, async () => {
     await clickNextFollowUpCalendarTrigger(row, log);
@@ -2926,7 +2926,7 @@ async function setNextFollowUpTime(
   await pause("normal");
 
   const picker = await findVisibleDateTimePicker(page);
-  await picker.waitFor({ state: "visible", timeout: 15_000 });
+  await picker.waitFor({ state: "visible", timeout: 4_000 });
 
   const calendar = picker.locator(".k-calendar").first();
   const calendarRoot = (await calendar.isVisible({ timeout: 2_000 }).catch(() => false))
@@ -2940,7 +2940,7 @@ async function setNextFollowUpTime(
     .locator("td:not(.k-other-month):not(.k-state-disabled), [role='gridcell']:not([aria-disabled='true'])")
     .filter({ hasText: new RegExp(`^\\s*${target.day}\\s*$`) })
     .first();
-  await dayCell.click({ timeout: 10_000 });
+  await dayCell.click({ timeout: 6_000 });
   await pause("short");
   await log("info", "Next Follow Up Time — date selected; setting time 9:30 PM.");
 
@@ -2983,7 +2983,7 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
     await log("info", `Follow Up Remarks already "${FOLLOW_UP_REMARKS}" — skipping re-type.`);
   } else {
     const remarks = await resolveFollowUpRemarksInput(formRoot);
-    await remarks.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+    await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
     await withModalInputBypass(modal, async () => {
       await remarks.click();
       await remarks.fill("");
@@ -3033,11 +3033,11 @@ async function processOneTransfer(
   const { log, redis, dealerId } = ctx;
 
   let mainModal = await visibleEnquiryModal(detailPage);
-  await mainModal.waitFor({ state: "visible", timeout: 45_000 });
+  await mainModal.waitFor({ state: "visible", timeout: 4_000 });
   await log("info", "SALES CUSTOMER ENQUIRY INFO open — filling transfer fields (modal; list page is not edited).");
 
   mainModal = await ensurePinOnEnquiryModal(detailPage, log);
-  await mainModal.waitFor({ state: "visible", timeout: 15_000 });
+  await mainModal.waitFor({ state: "visible", timeout: 5_000 });
 
   const basicAlreadySaved = await isBasicInfoTransferFieldsFilled(mainModal);
   if (basicAlreadySaved) {

@@ -95,6 +95,47 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     });
   });
 
+  /** Latest in-flight or paused run (for Live session when admin has no dealerId on JWT). */
+  app.get("/v1/workflow-runs/in-flight", { preHandler: authPreHandler }, async (req) => {
+    const queryDealer = (req.query as { dealerId?: string }).dealerId;
+    const userDealer = req.user!.dealerId ?? undefined;
+
+    let dealerIds: string[];
+    if (queryDealer) {
+      if (!canAccessDealer(userDealer, queryDealer, req.user!.role)) {
+        return { run: null };
+      }
+      dealerIds = [queryDealer];
+    } else if (userDealer) {
+      dealerIds = [userDealer];
+    } else {
+      const dealers = await prisma.dealer.findMany({ select: { id: true }, orderBy: { createdAt: "desc" } });
+      dealerIds = dealers.map((d) => d.id);
+    }
+
+    const activeStatuses = ["PENDING", "RUNNING", "PAUSED_OTP", "PAUSED_USER", "FAILED"] as const;
+    const pickInFlight = (
+      runs: Awaited<ReturnType<typeof prisma.workflowRun.findMany>>,
+    ) =>
+      runs.find((r) => r.status === "RUNNING") ??
+      runs.find((r) => r.status === "PAUSED_OTP") ??
+      runs.find((r) => r.status === "PAUSED_USER") ??
+      runs.find((r) => r.status === "PENDING") ??
+      runs.find((r) => r.status === "FAILED");
+
+    for (const dealerId of dealerIds) {
+      await reconcileStaleWorkflowRunsForDealer(dealerId);
+      const runs = await prisma.workflowRun.findMany({
+        where: { dealerId, status: { in: [...activeStatuses] } },
+        orderBy: { startedAt: "desc" },
+        take: 15,
+      });
+      const run = pickInFlight(runs);
+      if (run) return { run };
+    }
+    return { run: null };
+  });
+
   app.post(
     "/v1/workflow-runs/reconcile-stale",
     { preHandler: authPreHandler },

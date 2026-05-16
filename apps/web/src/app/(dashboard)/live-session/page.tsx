@@ -10,6 +10,7 @@ import { LiveSessionLogPanel } from "@/components/live-session-log-panel";
 import { apiFetch } from "@/lib/api";
 import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
+import { linkLiveSessionToInFlightRun } from "@/lib/saved-automation-session";
 import { useAutomationSessionStore } from "@/stores/automation-session-store";
 import { useLiveStore } from "@/stores/live-store";
 
@@ -50,20 +51,34 @@ export default function LiveSessionPage() {
   const sessionHydrated = useAutomationSessionStore.persist?.hasHydrated?.() ?? true;
 
   useEffect(() => {
-    if (!sessionHydrated || !dealerId || !token) return;
-    if (useLiveStore.getState().runId) return;
-    const saved = useAutomationSessionStore.getState().get(dealerId);
-    if (saved?.runId) {
-      useLiveStore.getState().setRun(saved.runId);
-      return;
-    }
-    void apiFetch<WorkflowRunRow[]>(`/v1/workflow-runs?dealerId=${dealerId}`, { token })
-      .then((runs) => {
-        const pick =
-          runs.find((r) => r.status === "RUNNING" || r.status === "PAUSED_USER") ?? runs[0];
-        if (pick?.id) useLiveStore.getState().setRun(pick.id);
-      })
-      .catch(() => {});
+    if (!sessionHydrated || !token) return;
+
+    const linkRun = (): void => {
+      if (useLiveStore.getState().runId) return;
+      if (dealerId) {
+        const saved = useAutomationSessionStore.getState().get(dealerId);
+        if (saved?.runId) {
+          useLiveStore.getState().setRun(saved.runId);
+          return;
+        }
+        void apiFetch<WorkflowRunRow[]>(`/v1/workflow-runs?dealerId=${dealerId}`, { token })
+          .then((runs) => {
+            if (useLiveStore.getState().runId) return;
+            const pick =
+              runs.find((r) => r.status === "RUNNING" || r.status === "PAUSED_USER") ??
+              runs.find((r) => r.status === "PAUSED_OTP" || r.status === "PENDING") ??
+              runs[0];
+            if (pick?.id) useLiveStore.getState().setRun(pick.id);
+          })
+          .catch(() => {});
+        return;
+      }
+      void linkLiveSessionToInFlightRun(token).catch(() => {});
+    };
+
+    linkRun();
+    const t = window.setInterval(linkRun, 4000);
+    return () => window.clearInterval(t);
   }, [sessionHydrated, dealerId, token]);
 
   useEffect(() => {
@@ -216,13 +231,6 @@ export default function LiveSessionPage() {
               : "Waiting for the browser preview…";
 
   const showPostLogin = workflowDone || runRow?.status === "COMPLETED";
-  const canGdmsLogout =
-    !!runId &&
-    (runRow?.status === "RUNNING" ||
-      runRow?.status === "PAUSED_USER" ||
-      runRow?.status === "COMPLETED" ||
-      workflowDone) &&
-    !runStopped;
   const canContinueWhileRunning =
     runRow?.status === "RUNNING" &&
     (lastStep?.includes("Wait for GDMS dashboard") ||
@@ -237,6 +245,16 @@ export default function LiveSessionPage() {
       ? "Continue transfer"
       : "Retry transfer";
   const automationRunning = runRow?.status === "RUNNING" || runRow?.status === "PAUSED_OTP";
+  const runStatus = runRow?.status;
+  const isAutomationRunning =
+    runStatus === "RUNNING" || runStatus === "PAUSED_OTP" || runStatus === "PENDING";
+  const isAutomationPaused = runStatus === "PAUSED_USER" || runStatus === "FAILED";
+  const canPause = !!runId && isAutomationRunning;
+  const canResume = !!runId && isAutomationPaused;
+  const canStop = !!runId && (isAutomationRunning || isAutomationPaused);
+  const canGdmsLogout = !!runId && sessionActive;
+  const controlBtnDisabledClass =
+    "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale disabled:hover:bg-inherit disabled:hover:text-inherit";
 
   return (
     <div className="space-y-4">
@@ -317,21 +335,40 @@ export default function LiveSessionPage() {
               {retrying ? "Working…" : retryButtonLabel}
             </Button>
           ) : null}
-          <Button variant="outline" size="sm" onClick={() => void control("pause")}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={controlBtnDisabledClass}
+            disabled={!canPause}
+            onClick={() => void control("pause")}
+          >
             Pause
           </Button>
-          <Button variant="outline" size="sm" onClick={() => void control("resume")}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={controlBtnDisabledClass}
+            disabled={!canResume}
+            onClick={() => void control("resume")}
+          >
             Resume
           </Button>
           <Button
             size="sm"
             variant="outline"
+            className={controlBtnDisabledClass}
             disabled={!canGdmsLogout}
             onClick={() => void gdmsLogout()}
           >
             Logout GDMS
           </Button>
-          <Button size="sm" variant="outline" onClick={() => void control("stop")}>
+          <Button
+            size="sm"
+            variant="outline"
+            className={controlBtnDisabledClass}
+            disabled={!canStop}
+            onClick={() => void control("stop")}
+          >
             Stop
           </Button>
         </div>
