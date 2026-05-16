@@ -5,8 +5,8 @@ import { useEffect } from "react";
 const CHUNK_RELOAD_KEY = "gdms-web-chunk-reloads";
 
 /**
- * Stale `.next` / missing chunk (`Cannot find module './192.js'`) par ek–do baar auto reload;
- * zyada loop nahi. Dev ab hamesha `clean` ke baad chalta hai — ye sirf edge cases.
+ * Stale `.next` / missing chunk (`Cannot find module './192.js'`) triggers one or two auto reloads;
+ * no infinite loop. Dev always runs after `clean` — this covers edge cases only.
  */
 export function ClientBootstrap(): null {
   useEffect(() => {

@@ -7,11 +7,13 @@ import { useLiveStore } from "@/stores/live-store";
 import { useLeadsStore } from "@/stores/leads-store";
 import { SocketEvents } from "@gdms/shared";
 import { getApiUrl, getSocketIoSettings } from "@/lib/api";
+import { useAutomationSessionStore } from "@/stores/automation-session-store";
 
 export function useRealtimeSocket(): void {
   const token = useAuthStore((s) => s.accessToken);
   const runId = useLiveStore((s) => s.runId);
   const socketRef = useRef<Socket | null>(null);
+  const lastSocketErrorLogAtRef = useRef(0);
   const inquiriesSuffixRef = useRef("");
   const inquiriesQuerySuffix = useLeadsStore((s) => s.inquiriesQuerySuffix);
 
@@ -51,23 +53,16 @@ export function useRealtimeSocket(): void {
       return;
     }
     const { uri, path } = getSocketIoSettings();
-    /** Separate origin (Next :3001 → API :4000): many embedded browsers block WS cross-port — stick to HTTP long-polling */
-    const directHttpSocket =
-      typeof process.env.NEXT_PUBLIC_SOCKET_URL === "string" &&
-      /^https?:\/\//i.test(process.env.NEXT_PUBLIC_SOCKET_URL);
-    const transports = directHttpSocket
-      ? (["polling"] as const)
-      : (["polling", "websocket"] as const);
+    const transports = ["polling", "websocket"] as const;
 
     const socket = io(uri, {
       ...(path ? { path } : {}),
       auth: { token },
       transports: [...transports],
-      /** Avoid WS upgrade when only polling works (Cursor preview, corp proxies) */
-      ...(directHttpSocket ? { upgrade: false } : {}),
       withCredentials: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 25,
+      reconnectionDelayMax: 8000,
+      reconnectionAttempts: 50,
     });
     socketRef.current = socket;
 
@@ -82,6 +77,15 @@ export function useRealtimeSocket(): void {
     });
     socket.on(SocketEvents.LOG_LINE, (p: { level: string; message: string; ts: string }) => {
       storeRef.current.pushLog(p);
+      const m = p.message.toLowerCase();
+      if (
+        m.includes("gdms dashboard is ready") ||
+        m.includes("home screen detected") ||
+        m.includes("gdms home screen detected")
+      ) {
+        const dealerId = useAuthStore.getState().user?.dealerId;
+        if (dealerId) useAutomationSessionStore.getState().markGdmsReady(dealerId);
+      }
     });
     socket.on(SocketEvents.WORKFLOW_FAILED, (p: { error?: string }) => {
       const msg = typeof p?.error === "string" ? p.error : JSON.stringify(p);
@@ -91,16 +95,43 @@ export function useRealtimeSocket(): void {
         ts: new Date().toISOString(),
       });
     });
+    socket.on(SocketEvents.WORKFLOW_PAUSED_USER, (p: { message?: string }) => {
+      const msg =
+        typeof p?.message === "string" && p.message.trim()
+          ? p.message
+          : "Automation paused — fix CRM in the visible browser, then use Retry transfer.";
+      storeRef.current.pushLog({
+        level: "warn",
+        message: `Paused for manual intervention: ${msg}`,
+        ts: new Date().toISOString(),
+      });
+    });
     socket.on(SocketEvents.WORKFLOW_COMPLETED, (p: { workflowRunId?: string }) => {
       if (p?.workflowRunId && p.workflowRunId === useLiveStore.getState().runId) {
         storeRef.current.setWorkflowDone(true);
         storeRef.current.pushLog({
           level: "info",
-          message: "Workflow complete — GDMS me post-login screen preview me dikhna chahiye.",
+          message: "Workflow complete — the post-login GDMS screen should appear in the preview.",
           ts: new Date().toISOString(),
         });
       }
     });
+    socket.on(
+      SocketEvents.GDMS_SESSION_REDIRECTED,
+      (p: { workflowRunId?: string; reason?: "timeout" | "logout" }) => {
+        if (p?.workflowRunId && p.workflowRunId === useLiveStore.getState().runId) {
+          const message =
+            p.reason === "logout"
+              ? "GDMS logout — login page should appear in the preview."
+              : "GDMS session timed out — login page opened in the preview.";
+          storeRef.current.pushLog({
+            level: "info",
+            message,
+            ts: new Date().toISOString(),
+          });
+        }
+      },
+    );
     socket.on(SocketEvents.LEAD_CLASSIFIED, () => {
       const q = inquiriesSuffixRef.current;
       void fetch(`${getApiUrl()}/v1/inquiries${q}`, {
@@ -128,9 +159,14 @@ export function useRealtimeSocket(): void {
 
     socket.on("connect_error", (err: Error) => {
       storeRef.current.setRealtimeConnected(false);
+      const now = Date.now();
+      if (now - lastSocketErrorLogAtRef.current < 30_000) return;
+      lastSocketErrorLogAtRef.current = now;
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "app";
       storeRef.current.pushLog({
         level: "error",
-        message: `Socket: ${err.message} — polling-only mode (WS off) for :3001→:4000; phir bhi fail ho to Chrome + API :4000 verify karo`,
+        message: `Live updates disconnected (${err.message}). Check API on port 4000 is running (${origin} → ${getApiUrl()}). Automation may still run in the GDMS browser window.`,
         ts: new Date().toISOString(),
       });
     });

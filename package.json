@@ -3,11 +3,12 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "build": "turbo run build",
+    "build": "node scripts/prisma-generate.mjs && turbo run build",
+    "docker:up": "docker compose up -d postgres redis",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
-    "db:generate": "pnpm --filter @gdms/database exec prisma generate",
+    "db:generate": "node scripts/prisma-generate.mjs",
     "db:push": "pnpm --filter @gdms/database exec prisma db push",
     "db:migrate": "pnpm --filter @gdms/database exec prisma migrate dev --name init",
     "db:studio": "pnpm --filter @gdms/database exec prisma studio"

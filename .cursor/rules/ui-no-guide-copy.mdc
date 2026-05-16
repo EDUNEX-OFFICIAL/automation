@@ -1,0 +1,39 @@
+---
+description: No instruction or guide text in web UI copy
+globs: apps/web/**/*.{tsx,ts}
+alwaysApply: false
+---
+
+# UI copy — no guide or instruction text
+
+User-facing screens must not include setup guides, DevTools steps, env var names, or developer-only hints.
+
+## Do not show in UI
+
+- Environment variables (`NODE_ENV`, `AUTH_DEV_OPEN_LOGIN`, `CORS_ORIGIN`, etc.)
+- CLI commands (`pnpm dev`, port numbers for debugging)
+- Browser DevTools / Local Storage troubleshooting steps
+- Romanized-Hindi or mixed-language dev notes (“click Login only”, “if API is production…”)
+- Long paragraphs explaining how the system works internally
+
+## Allowed
+
+- Short labels, headings, button text (“Sign in”, “Save”)
+- Brief empty/loading states (“Loading…”, “Redirecting…”)
+- One-line informational footers that are product-facing (“Need access? Contact your administrator.”)
+- Form field labels and placeholders
+
+## Put documentation in README, not components
+
+## Examples
+
+**Bad**
+```tsx
+<p>Dev / non-production API: click Login only — first user is auto-created if the DB is empty.</p>
+<p>If you are stuck here: browser DevTools → Application → Local Storage → delete gdms-auth.</p>
+```
+
+**Good**
+```tsx
+<p className="text-sm text-zinc-500">Need access? Contact your administrator.</p>
+```

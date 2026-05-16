@@ -6,8 +6,8 @@ import { useAuthStore } from "@/stores/auth-store";
 const HYDRATE_FAILSAFE_MS = 2500;
 
 /**
- * Zustand persist rehydrate async hai; agar `localStorage` corrupt / parse fail ho to
- * `onFinishHydration` kabhi success pe fire nahi hota — bina failsafe ke `/` par sirf `null` = white screen.
+ * Zustand persist rehydrates asynchronously. If `localStorage` is corrupt or parse fails,
+ * `onFinishHydration` may never fire — without a failsafe, `/` stays `null` and the app is a white screen.
  */
 export function usePersistReady(): boolean {
   const [ready, setReady] = useState(() => useAuthStore.persist?.hasHydrated?.() ?? false);

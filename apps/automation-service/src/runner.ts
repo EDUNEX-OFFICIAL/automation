@@ -11,12 +11,38 @@ import {
 } from "@gdms/shared";
 import type { WorkflowDefinition, WorkflowStep } from "@gdms/workflow-engine";
 import { ingestInquiriesFromPage } from "./ingest-inquiries.js";
+import {
+  ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE,
+  runEnquiryTransfer,
+} from "./enquiry-transfer.js";
+import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
+import { humanDelay } from "./human-delay.js";
 import { env } from "./config.js";
+import { detectGdmsLoginError, gdmsLoginErrorMessage } from "./gdms-login-errors.js";
+import {
+  isGdmsDashboardReady,
+  isGdmsLoggedIn,
+  redisControlKey,
+  waitForGdmsDashboardReady,
+  watchGdmsSession,
+} from "./gdms-session-watch.js";
+import {
+  attachInputGuardListeners,
+  installAutomationBrowserScripts,
+} from "./automation-browser-setup.js";
+import {
+  getActiveSession,
+  registerActiveSession,
+  unregisterActiveSession,
+} from "./active-sessions.js";
 
 const prisma = createPrisma();
 
-function redisControlKey(runId: string, kind: "pause" | "stop"): string {
-  return `run:${runId}:control:${kind}`;
+function shouldKeepBrowserOnFailure(): boolean {
+  if (env.GDMS_KEEP_BROWSER_ON_FAILURE !== undefined) {
+    return env.GDMS_KEEP_BROWSER_ON_FAILURE;
+  }
+  return env.PLAYWRIGHT_HEADED;
 }
 
 async function isPaused(redis: Redis, runId: string): Promise<boolean> {
@@ -116,7 +142,13 @@ export type ExecutePayload = {
   dealerId: string;
   gdmsUsername: string;
   gdmsPassword: string;
-  workflow: WorkflowDefinition;
+  loginWorkflow: WorkflowDefinition;
+  operationWorkflow: WorkflowDefinition;
+  operation: string;
+  sources: string[];
+  subSources?: Record<string, string[]>;
+  /** @deprecated legacy single-workflow execute */
+  workflow?: WorkflowDefinition;
   kind?: string;
 };
 
@@ -169,7 +201,35 @@ async function executeStep(
     await page.waitForSelector(sel, { timeout });
     return;
   }
+  if (step.type === "assert_no_gdms_login_error") {
+    const detected = await detectGdmsLoginError(page, 2500);
+    if (detected) throw new Error(gdmsLoginErrorMessage(detected));
+    return;
+  }
+  if (step.type === "wait_for_gdms_dashboard") {
+    await waitForGdmsDashboardReady(
+      page,
+      async (level, message) => {
+        await publish(redisClient, SocketEvents.LOG_LINE, dealerId, {
+          workflowRunId: runId,
+          level,
+          message,
+          ts: new Date().toISOString(),
+        });
+      },
+      step.timeoutMs ?? 180_000,
+      {
+        redis: redisClient,
+        runId,
+        dealerId,
+        shouldStop: () => isStopped(redisClient, runId),
+      },
+    );
+    return;
+  }
   if (step.type === "wait_for_otp") {
+    const detected = await detectGdmsLoginError(page, 1500);
+    if (detected) throw new Error(gdmsLoginErrorMessage(detected));
     await publish(redisClient, SocketEvents.OTP_REQUIRED, dealerId, {
       workflowRunId: runId,
       hint: step.label,
@@ -198,6 +258,10 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
   let context: BrowserContext | null = null;
   let shotLoop: ReturnType<typeof setInterval> | null = null;
   let otpResolved: string | undefined;
+  let browserRetained = false;
+  let page: Page | null = null;
+  let detachInputGuard: (() => void) | null = null;
+  let captureFrame: () => Promise<void> = async () => {};
 
   const log = async (level: LogLinePayload["level"], message: string) => {
     const line: LogLinePayload = {
@@ -225,6 +289,12 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       dealerId: payload.dealerId,
     });
 
+    if (payload.operation === "enquiry_transfer" && !env.PLAYWRIGHT_HEADED) {
+      throw new Error(
+        "Enquiry transfer requires PLAYWRIGHT_HEADED=true (visible browser only — set it in apps/automation-service/.env and restart pnpm dev).",
+      );
+    }
+
     const sessionDir = path.join(env.SESSIONS_DIR, payload.dealerId);
     fs.mkdirSync(sessionDir, { recursive: true });
 
@@ -235,12 +305,29 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       viewport: { width: 1280, height: 800 },
     });
 
-    const page: Page = await context.newPage();
+    await installAutomationBrowserScripts(context);
 
-    const shotMs = headed ? 1200 : 2000;
-    const captureFrame = async (): Promise<void> => {
+    if (await applyGdmsBootstrapCookies(context, sessionDir)) {
+      await log("info", "GDMS bootstrap cookies applied from env.");
+    }
+
+    page = await context.newPage();
+
+    if (payload.operation === "enquiry_transfer") {
+      detachInputGuard = attachInputGuardListeners(page);
+      await log(
+        "info",
+        "GDMS browser input locked during automation — use Stop on Live session to interrupt.",
+      );
+    }
+
+    /** Preview streaming only when headless non-transfer jobs need remote visibility. */
+    const screenshotsEnabled = !headed && payload.operation !== "enquiry_transfer";
+    const shotMs = 2000;
+    captureFrame = async (): Promise<void> => {
+      if (!screenshotsEnabled) return;
       try {
-        if (await isStopped(redisClient, payload.runId)) return;
+        if (!page || (await isStopped(redisClient, payload.runId))) return;
         const buf = await page.screenshot({ type: "jpeg", quality: 60 });
         const frame: ScreenshotFramePayload = {
           workflowRunId: payload.runId,
@@ -253,92 +340,318 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       }
     };
 
-    void captureFrame();
-    shotLoop = setInterval(() => {
+    if (screenshotsEnabled) {
       void captureFrame();
-    }, shotMs);
+      shotLoop = setInterval(() => {
+        void captureFrame();
+      }, shotMs);
+    }
 
-    for (const step of payload.workflow.steps) {
-      if (await isStopped(redisClient, payload.runId)) throw new Error("stopped");
-      await waitIfPaused(redisClient, payload.runId);
-
-      const creds = {
-        ...baseCreds,
-        ...(otpResolved ? { otp: otpResolved } : {}),
-      };
-
-      const waitOtp = async () => {
-        otpResolved = await waitForOtp(redisClient, payload.runId, step.timeoutMs ?? 600_000);
-      };
-
-      const retries = step.retries ?? 2;
-      let lastErr: unknown;
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-          await executeStep(page, step, payload.runId, payload.dealerId, redisClient, waitOtp, creds);
-          lastErr = undefined;
-          break;
-        } catch (e) {
-          lastErr = e;
-          await log("warn", `Step ${step.id} retry ${attempt}: ${String(e)}`);
-          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-        }
-      }
-      if (lastErr) throw lastErr;
-
-      await publish(redisClient, SocketEvents.STEP_COMPLETED, payload.dealerId, {
-        workflowRunId: payload.runId,
-        stepId: step.id,
-        label: step.label,
+    if (payload.operation === "enquiry_transfer" && context && page) {
+      browserRetained = true;
+      registerActiveSession({
+        runId: payload.runId,
+        dealerId: payload.dealerId,
+        page,
+        context,
+        payload,
+        captureFrame,
+        stopScreenshots: () => {
+          if (shotLoop) {
+            clearInterval(shotLoop);
+            shotLoop = null;
+          }
+        },
       });
+    }
+
+    const legacyWorkflow = payload.workflow;
+    const loginWorkflow = payload.loginWorkflow ?? legacyWorkflow;
+    const operationWorkflow = payload.operationWorkflow ?? legacyWorkflow;
+    if (!loginWorkflow || !operationWorkflow) {
+      throw new Error("Missing login or operation workflow definition");
+    }
+
+    const baseUrl =
+      loginWorkflow.steps.find((s) => s.type === "navigate" && s.url)?.url ??
+      env.GDMS_BASE_URL;
+
+    if (baseUrl) {
+      await page.goto(baseUrl, { timeout: 60_000, waitUntil: "domcontentloaded" });
+    }
+
+    const skipLogin =
+      payload.operation === "enquiry_transfer"
+        ? await isGdmsDashboardReady(page)
+        : await isGdmsLoggedIn(page);
+    const stepGroups: { label: string; steps: WorkflowDefinition["steps"] }[] = [];
+    if (skipLogin) {
+      await log(
+        "info",
+        payload.operation === "enquiry_transfer"
+          ? "GDMS home screen detected — skipping login."
+          : "GDMS session active — skipping login.",
+      );
+      stepGroups.push({ label: "operation", steps: operationWorkflow.steps });
+    } else {
+      stepGroups.push({ label: "login", steps: loginWorkflow.steps });
+      stepGroups.push({ label: "operation", steps: operationWorkflow.steps });
+    }
+
+    if (payload.operation && payload.sources.length > 0) {
+      const subSummary = payload.subSources
+        ? Object.entries(payload.subSources)
+            .map(([k, v]) => `${k}: ${v.join(", ")}`)
+            .join("; ")
+        : "none";
+      await log(
+        "info",
+        `Operation ${payload.operation} — sources: ${payload.sources.join(", ")}; sub-sources: ${subSummary}`,
+      );
+    }
+
+    const runCtx = {
+      shouldStop: () => isStopped(redisClient, payload.runId),
+      waitIfPaused: () => waitIfPaused(redisClient, payload.runId),
+    };
+
+    for (const group of stepGroups) {
+      for (const step of group.steps) {
+        if (group.label === "operation" && step.type === "navigate" && skipLogin) {
+          continue;
+        }
+
+        if (await isStopped(redisClient, payload.runId)) throw new Error("stopped");
+        await waitIfPaused(redisClient, payload.runId);
+
+        const creds = {
+          ...baseCreds,
+          ...(otpResolved ? { otp: otpResolved } : {}),
+        };
+
+        const waitOtp = async () => {
+          otpResolved = await waitForOtp(redisClient, payload.runId, step.timeoutMs ?? 600_000);
+        };
+
+        const retries = step.retries ?? 2;
+        let lastErr: unknown;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          try {
+            await executeStep(page, step, payload.runId, payload.dealerId, redisClient, waitOtp, creds);
+            lastErr = undefined;
+            break;
+          } catch (e) {
+            lastErr = e;
+            await log("warn", `Step ${step.id} retry ${attempt}: ${String(e)}`);
+            await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          }
+        }
+        if (lastErr) throw lastErr;
+
+        await publish(redisClient, SocketEvents.STEP_COMPLETED, payload.dealerId, {
+          workflowRunId: payload.runId,
+          stepId: step.id,
+          label: step.label,
+        });
+        await prisma.workflowRun.update({
+          where: { id: payload.runId },
+          data: { currentStep: step.id },
+        });
+        await log("info", `Completed step ${step.label}`);
+      }
+    }
+
+    const signalManualIntervention = async (message: string): Promise<never> => {
       await prisma.workflowRun.update({
         where: { id: payload.runId },
-        data: { currentStep: step.id },
+        data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
       });
-      await log("info", `Completed step ${step.label}`);
+      await publish(redisClient, SocketEvents.WORKFLOW_PAUSED_USER, payload.dealerId, {
+        workflowRunId: payload.runId,
+        message,
+      });
+      await log("error", message);
+      throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
+    };
+
+    if (payload.operation === "enquiry_transfer") {
+      await log("info", "Starting enquiry transfer automation (runs until Stop).");
+      await humanDelay(800, 1500);
+      await runEnquiryTransfer({
+        page,
+        runId: payload.runId,
+        dealerId: payload.dealerId,
+        redis: redisClient,
+        sources: payload.sources,
+        subSources: payload.subSources,
+        log,
+        shouldStop: runCtx.shouldStop,
+        waitIfPaused: runCtx.waitIfPaused,
+        signalManualIntervention,
+      });
+      await humanDelay(500, 1200);
     }
 
     if (payload.kind === "inquiry_fetch") {
       await ingestInquiriesFromPage(page, payload.dealerId, redisClient, prisma, log);
     }
 
-    await prisma.workflowRun.update({
-      where: { id: payload.runId },
-      data: { status: "COMPLETED", endedAt: new Date() },
-    });
+    if (payload.operation !== "enquiry_transfer") {
+      await prisma.workflowRun.update({
+        where: { id: payload.runId },
+        data: { status: "COMPLETED", endedAt: new Date() },
+      });
 
-    await publish(redisClient, SocketEvents.WORKFLOW_COMPLETED, payload.dealerId, {
-      workflowRunId: payload.runId,
-    });
+      await publish(redisClient, SocketEvents.WORKFLOW_COMPLETED, payload.dealerId, {
+        workflowRunId: payload.runId,
+      });
+    }
+
+    if (
+      (payload.operation || payload.kind === "gdms_login") &&
+      payload.operation !== "enquiry_transfer" &&
+      context &&
+      page
+    ) {
+      const endReason = await watchGdmsSession({
+        page,
+        context,
+        runId: payload.runId,
+        baseUrl: env.GDMS_BASE_URL,
+        redis: redisClient,
+        log,
+        publish: (type, p) => publish(redisClient, type, payload.dealerId, p),
+        shouldStop: () => isStopped(redisClient, payload.runId),
+      });
+      if (endReason === "stopped") {
+        await prisma.workflowRun.update({
+          where: { id: payload.runId },
+          data: { status: "STOPPED", endedAt: new Date() },
+        });
+        await log("info", "Live preview stopped.");
+      }
+    }
   } catch (e) {
     const raw = String(e);
     const stopped =
       raw === "stopped" ||
       /^Error:\s*stopped$/i.test(raw.trim()) ||
       (e instanceof Error && e.message === "stopped");
+    const pausedUser =
+      e instanceof Error && e.message === ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE;
     let msg =
       raw.includes("Executable doesn't exist") || raw.includes("browserType.launchPersistentContext")
-        ? `${raw} — Pehle: pnpm --filter @gdms/automation-service exec playwright install chromium`
+        ? `${raw} — First run: pnpm --filter @gdms/automation-service exec playwright install chromium`
         : raw;
     if (msg.includes("browserType.launch")) {
-      msg = `${msg} (Playwright/Chromium launch fail — binaries install zaroor karo)`;
+      msg = `${msg} (Playwright/Chromium launch failed — install browser binaries)`;
     }
-    await prisma.workflowRun.update({
-      where: { id: payload.runId },
-      data: {
-        status: stopped ? "STOPPED" : "FAILED",
-        endedAt: new Date(),
-        errorMessage: msg,
-      },
-    });
-    await publish(redisClient, SocketEvents.WORKFLOW_FAILED, payload.dealerId, {
-      workflowRunId: payload.runId,
-      error: msg,
-    });
-    await log("error", msg);
+
+    const pauseInsteadOfFail =
+      payload.operation === "enquiry_transfer" &&
+      !stopped &&
+      shouldKeepBrowserOnFailure();
+
+    if (!pausedUser) {
+      await prisma.workflowRun.update({
+        where: { id: payload.runId },
+        data: {
+          status: stopped ? "STOPPED" : pauseInsteadOfFail ? "PAUSED_USER" : "FAILED",
+          endedAt: new Date(),
+          errorMessage: pauseInsteadOfFail
+            ? "Automation paused — use Resume on Live session when GDMS is ready."
+            : msg,
+        },
+      });
+      if (!stopped && pauseInsteadOfFail) {
+        await publish(redisClient, SocketEvents.WORKFLOW_PAUSED_USER, payload.dealerId, {
+          workflowRunId: payload.runId,
+          message: msg,
+        });
+      } else if (!stopped) {
+        await publish(redisClient, SocketEvents.WORKFLOW_FAILED, payload.dealerId, {
+          workflowRunId: payload.runId,
+          error: msg,
+        });
+      }
+    }
+
+    if (pausedUser) {
+      await log("warn", msg);
+    } else {
+      await log("error", msg);
+    }
+
+    const keepBrowser =
+      !stopped &&
+      context &&
+      page &&
+      ((pausedUser && payload.operation === "enquiry_transfer") ||
+        (!pausedUser &&
+          shouldKeepBrowserOnFailure() &&
+          (payload.operation === "enquiry_transfer" || payload.kind === "gdms_login")));
+
+    if (keepBrowser && page && context) {
+      browserRetained = true;
+      const activePage = page;
+      const activeContext = context;
+      const stopScreenshots = (): void => {
+        if (shotLoop) {
+          clearInterval(shotLoop);
+          shotLoop = null;
+        }
+      };
+      if (!getActiveSession(payload.runId)) {
+        registerActiveSession({
+          runId: payload.runId,
+          dealerId: payload.dealerId,
+          page: activePage,
+          context: activeContext,
+          payload,
+          captureFrame,
+          stopScreenshots,
+        });
+      }
+      const enquiryPaused =
+        payload.operation === "enquiry_transfer" &&
+        (pausedUser || pauseInsteadOfFail);
+      if (enquiryPaused) {
+        await log(
+          "info",
+          "Browser kept open — use Resume saved session or Retry transfer on Live session when GDMS is ready.",
+        );
+      } else {
+        await log(
+          "info",
+          "Browser kept open — finish login in the preview, then use Retry transfer on the live session page.",
+        );
+        const endReason = await watchGdmsSession({
+          page: activePage,
+          context: activeContext,
+          runId: payload.runId,
+          baseUrl: env.GDMS_BASE_URL,
+          redis: redisClient,
+          log,
+          publish: (type, p) => publish(redisClient, type, payload.dealerId, p),
+          shouldStop: () => isStopped(redisClient, payload.runId),
+        });
+        unregisterActiveSession(payload.runId);
+        browserRetained = false;
+        if (endReason === "stopped") {
+          await prisma.workflowRun.update({
+            where: { id: payload.runId },
+            data: { status: "STOPPED", endedAt: new Date() },
+          });
+        }
+      }
+    }
   } finally {
-    if (shotLoop) clearInterval(shotLoop);
-    if (context) await context.close().catch(() => undefined);
+    if (!browserRetained) {
+      detachInputGuard?.();
+      unregisterActiveSession(payload.runId);
+      if (shotLoop) clearInterval(shotLoop);
+      if (context) await context.close().catch(() => undefined);
+    }
     redisClient.disconnect();
   }
 }

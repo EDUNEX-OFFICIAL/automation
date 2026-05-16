@@ -37,7 +37,7 @@ async function runCallSession(aiCallId: string): Promise<void> {
   if (!sm?.current) sm = initialCallState();
 
   const utterance =
-    "Haan ji, main Hyundai ke bare mein poochh raha tha. Delivery kab tak ho sakti hai?";
+    "Hi, I was asking about Hyundai. When can delivery happen?";
 
   for (let i = 0; i < 4 && sm.current !== "STATE_4"; i++) {
     const intent = await inferIntent(sm.current, utterance);
@@ -120,7 +120,14 @@ async function main(): Promise<void> {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
-main().catch((e) => {
-  console.error(e);
+main().catch((err) => {
+  const e = err as NodeJS.ErrnoException;
+  if (e?.code === "EADDRINUSE") {
+    console.error(
+      `\n[@gdms/ai-service] Port ${env.PORT} is already in use — stop the other process or change PORT in apps/ai-service/.env\n`,
+    );
+  } else {
+    console.error(err);
+  }
   process.exit(1);
 });

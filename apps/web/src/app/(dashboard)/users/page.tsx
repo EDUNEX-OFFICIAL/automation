@@ -49,7 +49,7 @@ export default function UsersPage() {
 
   if (!token) return null;
   if (role !== "SUPER_ADMIN" && role !== "DEALER") {
-    return <p className="text-sm text-zinc-600">Users page sirf admin/dealer ke liye.</p>;
+    return <p className="text-sm text-zinc-600">The Users page is for admins and dealers only.</p>;
   }
 
   return (
@@ -83,7 +83,7 @@ export default function UsersPage() {
           )}
           {role === "SUPER_ADMIN" && (
             <div>
-              <Label>Dealer ID (USER/DEALER ke liye)</Label>
+              <Label>Dealer ID (for USER/DEALER roles)</Label>
               <Input value={dealerId ?? ""} onChange={(e) => setDealerId(e.target.value || undefined)} />
             </div>
           )}

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { AutomationSessionHydrate } from "@/components/automation-session-hydrate";
 import { ClientBootstrap } from "@/components/client-bootstrap";
 import "./globals.css";
 
@@ -22,6 +23,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} antialiased`}>
         <ClientBootstrap />
+        <AutomationSessionHydrate />
         {children}
       </body>
     </html>

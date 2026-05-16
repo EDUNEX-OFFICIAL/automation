@@ -4,8 +4,8 @@
 
 ## Phase 2 (done in repo)
 
-- **Device Socket.IO auth**: `deviceId` + `socketToken` (bcrypt hashed in DB; plain token sirf `/claim` response mein).
-- **Click-to-call → phone**: `GET` nahi — `POST /v1/inquiries/:id/call` ke baad `CALL_TASK` device room par emit.
+- **Device Socket.IO auth**: `deviceId` + `socketToken` (bcrypt hashed in DB; plain token only in the `/claim` response).
+- **Click-to-call → phone**: not `GET` — after `POST /v1/inquiries/:id/call`, emit `CALL_TASK` to the device room.
 - **Prisma migration**: `packages/database/prisma/migrations/20260214120000_phase2_android_socket_token`.
 - **Android**: `io.socket:socket.io-client` + claim → service with `socketToken`.
 
@@ -21,15 +21,15 @@
 - **SUPER_ADMIN realtime**: on Socket.IO connect, joins every `dealer:{id}` room so workflow + `CALL_STATUS_UPDATE` + lead events fire without extra emits.
 - **Leads API**: `GET /v1/inquiries` without `dealerId` (SUPER_ADMIN only) returns latest 300 inquiries across tenants with `dealerName`; with `?dealerId=` still scoped + RBAC.
 - **Dashboard**: Leads page — super admin dealer filter (`All` / one dealer); `LEAD_CLASSIFIED` refetch uses the same query as the table (via `inquiriesQuerySuffix` in store).
-- **Caveat**: naya dealer create hone ke baad super admin ko nayi dealer rooms tabhi milenge jab wo socket dubara connect kare (page refresh / re-login).
+- **Caveat**: after a new dealer is created, the super admin only joins the new dealer rooms after reconnecting the socket (page refresh / re-login).
 
 ## Phase 5 (done in repo — foundation)
 
-- **Android**: `GatewayCredentials` — `androidx.security:security-crypto` EncryptedSharedPreferences for `apiBase` + `deviceId` + `socketToken` after claim; **Start gateway (saved token)** aur **Clear saved credentials**; app version **0.4.0**.
-- **Shared contract**: Socket.IO `VOICE_SESSION_SIGNAL` + `VoiceSessionSignalPayload` — abhi koi relay nahi, future WebRTC/SFU ke liye naam fix.
-- **API env**: `VOICE_BRIDGE_ENABLED=true|false` — startup log only; TURN/SFU alag milestone.
+- **Android**: `GatewayCredentials` — `androidx.security:security-crypto` EncryptedSharedPreferences for `apiBase` + `deviceId` + `socketToken` after claim; **Start gateway (saved token)** and **Clear saved credentials**; app version **0.4.0**.
+- **Shared contract**: Socket.IO `VOICE_SESSION_SIGNAL` + `VoiceSessionSignalPayload` — no relay yet; names fixed for future WebRTC/SFU.
+- **API env**: `VOICE_BRIDGE_ENABLED=true|false` — startup log only; TURN/SFU is a separate milestone.
 
-**Token rotate / API par naya `socketToken`:** app abhi auto-update prefs nahi karti — dubara **pair** karo ya Clear + Pair; future mein rotate REST se prefs update kar sakte ho.
+**Token rotate / new API `socketToken`:** the app does not auto-update prefs yet — **pair** again or Clear + Pair; later you can update prefs from the rotate REST endpoint.
 
 ## Phase 6 (done in repo — WebRTC prep + hardening scaffold)
 
@@ -57,7 +57,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 4. `pnpm install`
 5. `pnpm --filter @gdms/shared build` && `pnpm --filter @gdms/auth build` && `pnpm --filter @gdms/logger build` && `pnpm --filter @gdms/workflow-engine build` && `pnpm --filter @gdms/database exec prisma generate`
-6. Start Postgres/Redis: `docker compose up -d postgres redis`
+6. Start Postgres/Redis: `pnpm docker:up` (or `docker compose up -d postgres redis`). Compose maps **Postgres → localhost:54322** and **Redis → localhost:6380** on the host — set `DATABASE_URL` / `REDIS_URL` in each app `.env` to those ports when Node runs on your machine.
 7. `pnpm --filter @gdms/database exec prisma db push`
 8. Dev (separate terminals):  
    - `pnpm --filter @gdms/api dev`  
@@ -90,6 +90,10 @@ Same DB/Redis + `CREDENTIALS_MASTER_KEY`, `AUTOMATION_INTERNAL_SECRET`, `AI_INTE
 `docker compose up --build` starts postgres, redis, api, web, worker, automation, ai.
 
 > **Hostinger KVM:** CPU-only; XTTS/RVC real-time latency will be high — tune model sizes or add GPU later.
+
+## Enquiry transfer automation
+
+See [apps/automation-service/docs/ENQUIRY_TRANSFER.md](apps/automation-service/docs/ENQUIRY_TRANSFER.md) for the full GDMS enquiry transfer flow (reference images 1–17), consultant rotation, IST follow-up rules, and resume/retry behaviour.
 
 ## Android gateway
 

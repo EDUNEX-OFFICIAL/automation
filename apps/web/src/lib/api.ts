@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/stores/auth-store";
+import { toUserMessage } from "@/lib/user-messages";
 
 const rawApi = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -20,7 +21,7 @@ function normalizeAbsoluteSocketOrigin(uri: string): string {
 
 /** Base URL for HTTP API (supports same-origin `/api-upstream` when proxied via next.config.mjs). */
 export function getApiUrl(): string {
-  if (!rawApi.startsWith("/")) return rawApi;
+  if (!rawApi.startsWith("/")) return normalizeAbsoluteSocketOrigin(rawApi);
   if (typeof window !== "undefined") return `${window.location.origin}${rawApi}`;
   const port = process.env.NEXT_PUBLIC_DEV_WEB_PORT ?? "3000";
   return `http://127.0.0.1:${port}${rawApi}`;
@@ -46,6 +47,18 @@ export function getSocketIoSettings(): { uri: string; path?: string } {
   return { uri: rawApi };
 }
 
+/** Quick check that the API process is up (used before OTP submit). */
+export async function checkApiHealth(): Promise<void> {
+  try {
+    const res = await fetch(`${getApiUrl()}/health`, { credentials: "include" });
+    if (!res.ok) throw new Error(`health ${res.status}`);
+  } catch {
+    throw new Error(
+      "API is not running. Stop duplicate pnpm dev processes, free port 4000, restart with a single `pnpm dev`, then submit OTP again.",
+    );
+  }
+}
+
 /** Try cookie refresh; returns new access token or null. */
 async function tryRefreshAccessToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
@@ -61,6 +74,18 @@ async function tryRefreshAccessToken(): Promise<string | null> {
   return data.accessToken;
 }
 
+export class ApiHttpError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   opts: RequestInit & { token?: string } = {},
@@ -69,7 +94,10 @@ export async function apiFetch<T>(
 
   const doFetch = async (authToken: string | undefined): Promise<Response> => {
     const headers = new Headers(rest.headers);
-    headers.set("Content-Type", "application/json");
+    const hasBody = rest.body !== undefined && rest.body !== null && rest.body !== "";
+    if (hasBody && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
     if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
     return fetch(`${getApiUrl()}${path}`, { ...rest, headers, credentials: "include" });
   };
@@ -78,12 +106,7 @@ export async function apiFetch<T>(
   try {
     res = await doFetch(initialToken);
   } catch (e) {
-    const isNetworkFail = e instanceof TypeError && String(e.message).includes("fetch");
-    throw new Error(
-      isNetworkFail
-        ? "API connect nahi hua — `pnpm dev` chalao, API :4000 / `/api-upstream` proxy OK hai?"
-        : String(e),
-    );
+    throw new Error(toUserMessage(e, "network"));
   }
 
   const canSilentRefresh =
@@ -101,7 +124,14 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || res.statusText);
+    const context = path.startsWith("/v1/auth/") ? "auth" : "generic";
+    let body: unknown = text;
+    try {
+      body = text ? (JSON.parse(text) as unknown) : text;
+    } catch {
+      /* plain text */
+    }
+    throw new ApiHttpError(toUserMessage(text || res.statusText, context), res.status, body);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

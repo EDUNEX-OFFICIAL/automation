@@ -16,6 +16,13 @@ export const GDMS_SELECTOR_ENV = {
   inquiryRow: "GDMS_SEL_INQUIRY_ROW",
   transferButton: "GDMS_SEL_TRANSFER",
   statusSelect: "GDMS_SEL_STATUS",
+  /**
+   * Optional — live preview manual logout (`performGdmsLogout`).
+   * Override: `pw:btn|Logout` or a CSS selector. When unset, automation tries
+   * GDMS 2.0 bottom-left sidebar (last nav/aside control), then named logout
+   * buttons, then title/aria-label; always falls back to clear cookies + login URL.
+   */
+  logout: "GDMS_SEL_LOGOUT",
 } as const;
 
 export function defaultLoginWorkflow(baseUrl: string): WorkflowDefinition {
@@ -56,6 +63,12 @@ export function defaultLoginWorkflow(baseUrl: string): WorkflowDefinition {
         selector: sendOtp,
       },
       {
+        id: "verify_login",
+        type: "assert_no_gdms_login_error",
+        label: "Verify GDMS accepted credentials (no login error on page)",
+        timeoutMs: 15_000,
+      },
+      {
         id: "otp_gate",
         type: "wait_for_otp",
         label: "Wait for OTP from user (dashboard modal)",
@@ -75,7 +88,41 @@ export function defaultLoginWorkflow(baseUrl: string): WorkflowDefinition {
         label: "Login after OTP",
         selector: finalizeLogin,
       },
+      {
+        id: "wait_dashboard",
+        type: "wait_for_gdms_dashboard",
+        label: "Wait for GDMS dashboard",
+        timeoutMs: 180_000,
+      },
     ],
+  };
+}
+
+export function operationStubWorkflow(
+  operation: string,
+  targetUrl: string,
+): WorkflowDefinition {
+  return {
+    version: "1",
+    name: operation,
+    steps: [
+      {
+        id: "nav",
+        type: "navigate",
+        label: `Open ${operation.replace(/_/g, " ")}`,
+        url: targetUrl,
+      },
+      { id: "wait", type: "wait_selector", label: "Wait page", selector: "body" },
+    ],
+  };
+}
+
+/** Placeholder — enquiry transfer logic runs in automation-service after login. */
+export function enquiryTransferWorkflow(): WorkflowDefinition {
+  return {
+    version: "1",
+    name: "enquiry_transfer",
+    steps: [],
   };
 }
 

@@ -1,0 +1,42 @@
+---
+description: User-facing errors must be plain, non-technical language
+globs: apps/web/**/*.{tsx,ts}
+alwaysApply: false
+---
+
+# UI errors and warnings — people-friendly copy
+
+All messages shown to users (inline errors, toasts, alerts) must be understandable without technical background.
+
+## Rules
+
+- Map API/network failures through `toUserMessage()` in `apps/web/src/lib/user-messages.ts`
+- Do not show: HTTP status codes, stack traces, raw JSON, Prisma/Redis errors, env names, or CLI hints
+- Log technical details with `console.error` in development only
+- Keep messages to one short sentence when possible
+
+## Examples
+
+**Bad**
+```tsx
+setErr("Internal Server Error");
+setErr("API connect failed — run `pnpm dev`, API :4000");
+setErr(JSON.stringify(err));
+```
+
+**Good**
+```tsx
+setErr(toUserMessage(e, "auth"));
+// "Something went wrong on our side. Please try again in a moment."
+// "We couldn't reach the server. Check your connection and try again."
+```
+
+**Bad**
+```tsx
+{err && <p>{res.status} {await res.text()}</p>}
+```
+
+**Good**
+```tsx
+{err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+```

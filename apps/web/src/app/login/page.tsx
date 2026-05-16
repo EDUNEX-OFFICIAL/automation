@@ -4,7 +4,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/api";
+import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePersistReady } from "@/hooks/use-persist-ready";
 
@@ -13,6 +16,8 @@ export default function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const token = useAuthStore((s) => s.accessToken);
   const storageReady = usePersistReady();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -21,54 +26,81 @@ export default function LoginPage() {
     router.replace("/dashboard");
   }, [storageReady, token, router]);
 
-  async function onContinue(): Promise<void> {
+  async function onSubmit(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
     setErr(null);
     setBusy(true);
     try {
+      const emailTrim = email.trim();
+      const body =
+        emailTrim || password
+          ? JSON.stringify({ email: emailTrim, password })
+          : JSON.stringify({});
       const res = await apiFetch<{
         accessToken: string;
         user: { id: string; email: string; role: string; dealerId: string | null };
-      }>("/v1/auth/login", { method: "POST", body: JSON.stringify({}) });
+      }>("/v1/auth/login", { method: "POST", body });
       setAuth(res.accessToken, res.user);
       router.replace("/dashboard");
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      try {
-        const j = JSON.parse(raw) as { error?: string };
-        if (typeof j?.error === "string") setErr(j.error);
-        else setErr(raw);
-      } catch {
-        setErr(raw);
-      }
+    } catch (error) {
+      setErr(toUserMessage(error, "auth"));
     } finally {
       setBusy(false);
     }
   }
 
+  const signingIn = busy || !storageReady;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-100 px-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>GDMS SaaS Login</CardTitle>
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4 py-12">
+      <Card className="w-full max-w-md border-zinc-200 shadow-sm">
+        <CardHeader className="space-y-1 text-center">
+          <CardTitle className="text-2xl font-semibold tracking-tight">GDMS Automation</CardTitle>
+          <p className="text-sm text-zinc-500">Sign in to your dealer workspace</p>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-zinc-600">
-            Dev / non-production API: sirf Login dabao — pehla user auto-banta hai agar DB khali ho. Agar API{" "}
-            <code className="rounded bg-zinc-200 px-1">NODE_ENV=production</code> hai to{" "}
-            <code className="rounded bg-zinc-200 px-1">AUTH_DEV_OPEN_LOGIN=true</code> chahiye, aur{" "}
-            <code className="rounded bg-zinc-200 px-1">CORS_ORIGIN</code> mein tumhara web URL.
+        <CardContent>
+          <form onSubmit={(e) => void onSubmit(e)} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@dealer.com"
+                value={email}
+                onChange={(ev) => setEmail(ev.target.value)}
+                disabled={signingIn}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(ev) => setPassword(ev.target.value)}
+                disabled={signingIn}
+              />
+            </div>
+            {err && (
+              <p className="text-sm text-red-600" role="alert">
+                {err}
+              </p>
+            )}
+            <Button type="submit" className="w-full" disabled={signingIn}>
+              {!storageReady ? "Loading…" : busy ? "Signing in…" : "Sign in"}
+            </Button>
+          </form>
+          <p className="mt-6 text-center text-sm text-zinc-500">
+            Need access? Contact your administrator.
           </p>
-          {err && <p className="text-sm text-red-600">{err}</p>}
-          <Button
-            type="button"
-            className="w-full"
-            disabled={busy || !storageReady}
-            onClick={() => void onContinue()}
-          >
-            {!storageReady ? "…" : busy ? "…" : "Login"}
-          </Button>
         </CardContent>
       </Card>
     </div>
   );
 }
+

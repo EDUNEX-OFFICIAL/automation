@@ -11,13 +11,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useLiveStore } from "@/stores/live-store";
 import { useAuthStore } from "@/stores/auth-store";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, checkApiHealth } from "@/lib/api";
+import { toUserMessage } from "@/lib/user-messages";
+import { useAutomationSessionStore } from "@/stores/automation-session-store";
 
 export function OtpModal() {
   const otpOpen = useLiveStore((s) => s.otpOpen);
   const otpRunId = useLiveStore((s) => s.otpRunId);
   const closeOtp = useLiveStore((s) => s.closeOtp);
   const token = useAuthStore((s) => s.accessToken);
+  const dealerId = useAuthStore((s) => s.user?.dealerId);
+  const markOtpVerified = useAutomationSessionStore((s) => s.markOtpVerified);
   const [otp, setOtp] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -26,31 +30,33 @@ export function OtpModal() {
   async function submit(): Promise<void> {
     const code = otp.replace(/\s+/g, "").trim();
     if (!token || !otpRunId) {
-      setErr("Session / run id missing — Live session kholo ya dubara login karo.");
+      setErr("Session or run id is missing. Open Live session or sign in again.");
       return;
     }
     if (code.length < 4) {
-      setErr("OTP kam az kam 4 characters.");
+      setErr("OTP must be at least 4 characters.");
       return;
     }
     setErr(null);
     setOkMsg(null);
     setPending(true);
     try {
+      await checkApiHealth();
       await apiFetch(`/v1/workflow-runs/${otpRunId}/otp`, {
         method: "POST",
         token,
         body: JSON.stringify({ otp: code }),
       });
+      if (dealerId) markOtpVerified(dealerId);
       setOkMsg(
-        "API ne OTP Redis tak bhej diya — automation ab GDMS par OTP bhar ke aage badhega. Live session / logs dekho.",
+        "OTP sent to automation. It will fill the GDMS form and continue. Check Live session or logs for progress.",
       );
       await new Promise((r) => setTimeout(r, 900));
       closeOtp();
       setOtp("");
       setOkMsg(null);
     } catch (e) {
-      setErr(String(e));
+      setErr(toUserMessage(e, "network"));
     } finally {
       setPending(false);
     }
@@ -70,8 +76,8 @@ export function OtpModal() {
       <DialogContent>
         <DialogTitle>GDMS OTP</DialogTitle>
         <p className="text-sm text-zinc-600">
-          Wo OTP daalen jo GDMS ne SMS / email par bheja ho. Submit ke baad Playwright wahi value
-          GDMS form mein fill karega.
+          Enter the OTP GDMS sent by SMS or email. After you submit, automation will fill the same
+          value in the GDMS form.
         </p>
         <Input
           placeholder="6-digit OTP"
@@ -86,7 +92,7 @@ export function OtpModal() {
         {okMsg && <p className="text-sm text-green-700">{okMsg}</p>}
         <DialogFooter>
           <Button onClick={() => void submit()} disabled={pending}>
-            {pending ? "Bhej rahe hain…" : "Submit OTP"}
+            {pending ? "Submitting…" : "Submit OTP"}
           </Button>
         </DialogFooter>
       </DialogContent>

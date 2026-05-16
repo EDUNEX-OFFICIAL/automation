@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
       val devId = deviceId.text.toString().trim()
       val pairCode = code.text.toString().trim()
       if (apiBase.isEmpty() || devId.isEmpty() || pairCode.isEmpty()) {
-        Toast.makeText(this, "Sab fields bharo", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Fill in all fields", Toast.LENGTH_SHORT).show()
         return@setOnClickListener
       }
       exec.execute {

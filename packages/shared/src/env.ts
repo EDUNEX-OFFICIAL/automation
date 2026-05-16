@@ -42,11 +42,15 @@ const apiEnvSchemaBase = z.object({
   AUTOMATION_SERVICE_URL: z.string().url().optional(),
   AI_SERVICE_URL: z.string().url().optional(),
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).optional(),
+  /** HMIL GDMS entry URL — used when resuming workflows from the API (same as worker/automation). */
+  GDMS_BASE_URL: z.string().url().optional(),
 });
 
 export const apiEnvSchema = apiEnvSchemaBase.transform((d) => ({
   ...d,
   AUTH_DEV_OPEN_LOGIN: d.AUTH_DEV_OPEN_LOGIN ?? d.NODE_ENV === "development",
+  AUTOMATION_SERVICE_URL: d.AUTOMATION_SERVICE_URL ?? "http://localhost:4101",
+  AUTOMATION_INTERNAL_SECRET: d.AUTOMATION_INTERNAL_SECRET ?? "dev-internal-secret-change-me",
 }));
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;
@@ -86,10 +90,42 @@ export const automationEnvSchema = z.object({
   WORKFLOW_ENGINE_VERSION: z.string().default("1"),
   DISPLAY: z.string().optional(),
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).default("dev-internal-secret-change-me"),
+  /** Default true — enquiry transfer requires a visible browser; set false only for headless-only runs. */
   PLAYWRIGHT_HEADED: z
     .string()
-    .default("false")
+    .default("true")
     .transform((s) => s === "true" || s === "1"),
+  /** Short hover / micro-pauses between clicks (enquiry transfer humanization). */
+  GDMS_MICRO_DELAY_MIN_MS: z.coerce.number().default(300),
+  GDMS_MICRO_DELAY_MAX_MS: z.coerce.number().default(1500),
+  /** Min delay (ms) between UI actions during enquiry transfer. */
+  GDMS_ACTION_DELAY_MIN_MS: z.coerce.number().default(2000),
+  GDMS_ACTION_DELAY_MAX_MS: z.coerce.number().default(6000),
+  /** Random interval between Search clicks while hunting for a matching enquiry. */
+  GDMS_SEARCH_INTERVAL_MIN_MS: z.coerce.number().default(20_000),
+  GDMS_SEARCH_INTERVAL_MAX_MS: z.coerce.number().default(45_000),
+  /** Max time to keep searching before failing the run (0 = infinite until Stop). */
+  GDMS_ENQUIRY_SEARCH_TIMEOUT_MS: z.coerce.number().default(0),
+  /** Retries for Save until success toast appears. */
+  GDMS_SAVE_RETRY_INTERVAL_MS: z.coerce.number().default(4000),
+  GDMS_SAVE_MAX_ATTEMPTS: z.coerce.number().default(10),
+  /** Keep Playwright open after failure (default: same as PLAYWRIGHT_HEADED). */
+  GDMS_KEEP_BROWSER_ON_FAILURE: z
+    .string()
+    .optional()
+    .transform((s) => (s === undefined ? undefined : s === "true" || s === "1")),
+  /** JSON array of Playwright cookie objects — local .env only, never commit secrets. */
+  GDMS_BOOTSTRAP_COOKIES: z.string().optional(),
+  /** When true, apply GDMS_BOOTSTRAP_COOKIES even if a persistent profile already exists. */
+  GDMS_FORCE_COOKIE_BOOTSTRAP: z
+    .string()
+    .optional()
+    .transform((s) => s === "true" || s === "1"),
+  /** Transparent overlay on GDMS — blocks mouse/keyboard in the automation browser (default on). */
+  GDMS_BLOCK_USER_INPUT: z
+    .string()
+    .optional()
+    .transform((s) => (s === undefined ? undefined : s !== "false" && s !== "0")),
 });
 
 export type AutomationEnv = z.infer<typeof automationEnvSchema>;

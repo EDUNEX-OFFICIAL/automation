@@ -4,7 +4,9 @@ export type WorkflowStepType =
   | "navigate"
   | "fill"
   | "click"
+  | "assert_no_gdms_login_error"
   | "wait_for_otp"
+  | "wait_for_gdms_dashboard"
   | "wait_selector"
   | "extract_table"
   | "custom";

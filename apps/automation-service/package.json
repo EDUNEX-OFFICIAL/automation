@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync('src/gdms-sidebar-inpage.js','dist/gdms-sidebar-inpage.js')\"",
     "dev": "node --watch --env-file=.env --import tsx src/server.ts",
     "start": "node dist/server.js",
     "pw:install": "playwright install chromium"

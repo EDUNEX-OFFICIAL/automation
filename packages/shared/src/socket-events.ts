@@ -11,8 +11,12 @@ export const SocketEvents = {
   CALL_STARTED: "CALL_STARTED",
   CALL_COMPLETED: "CALL_COMPLETED",
   WORKFLOW_FAILED: "WORKFLOW_FAILED",
+  /** Save retries exhausted — run paused for manual CRM intervention. */
+  WORKFLOW_PAUSED_USER: "WORKFLOW_PAUSED_USER",
   SCREENSHOT_FRAME: "SCREENSHOT_FRAME",
   LOG_LINE: "LOG_LINE",
+  /** GDMS idle timeout or manual logout — browser opened login URL */
+  GDMS_SESSION_REDIRECTED: "GDMS_SESSION_REDIRECTED",
   CONTROL_ACK: "CONTROL_ACK",
   ANDROID_HEARTBEAT: "ANDROID_HEARTBEAT",
   CALL_TASK: "CALL_TASK",
@@ -33,6 +37,8 @@ export type OtpRequiredPayload = {
 export type WorkflowStartedPayload = { workflowRunId: string; dealerId: string };
 
 export type WorkflowCompletedPayload = { workflowRunId: string };
+
+export type WorkflowPausedUserPayload = { workflowRunId: string; message?: string };
 
 export type StepCompletedPayload = {
   workflowRunId: string;
@@ -84,6 +90,11 @@ export type LogLinePayload = {
   level: "info" | "warn" | "error";
   message: string;
   ts: string;
+};
+
+export type GdmsSessionRedirectedPayload = {
+  workflowRunId: string;
+  reason: "timeout" | "logout";
 };
 
 export type ControlAckPayload = { workflowRunId: string; action: "pause" | "resume" | "stop"; ok: boolean };

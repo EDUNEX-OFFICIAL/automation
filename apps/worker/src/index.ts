@@ -1,19 +1,26 @@
 import { Worker } from "bullmq";
-import { parseEnv, workerEnvSchema } from "@gdms/shared";
+import { parseEnv, workerEnvSchema, type AutomationOperation, type WorkflowJobData } from "@gdms/shared";
 import { createLogger } from "@gdms/logger";
 import { createPrisma } from "@gdms/database";
 import { decryptSecret, type EncryptedPayload } from "@gdms/auth";
 import {
   defaultLoginWorkflow,
-  inquiryFetchWorkflow,
+  enquiryTransferWorkflow,
+  operationStubWorkflow,
   type WorkflowDefinition,
 } from "@gdms/workflow-engine";
-
+import { isEnabledAutomationOperation } from "@gdms/shared";
 const env = parseEnv(workerEnvSchema, process.env);
 const log = createLogger("worker");
 const prisma = createPrisma();
 
-const connection = { url: env.REDIS_URL };
+const connection = {
+  url: env.REDIS_URL,
+  maxRetriesPerRequest: null,
+  retryStrategy(times: number) {
+    return Math.min(times * 200, 3000);
+  },
+};
 
 function parseEnc(stored: string): EncryptedPayload {
   return JSON.parse(stored) as EncryptedPayload;
@@ -22,8 +29,11 @@ function parseEnc(stored: string): EncryptedPayload {
 async function dispatchAutomation(input: {
   runId: string;
   dealerId: string;
-  kind: string;
-  workflow: WorkflowDefinition;
+  operation: AutomationOperation;
+  sources: string[];
+  subSources?: Record<string, string[]>;
+  loginWorkflow: WorkflowDefinition;
+  operationWorkflow: WorkflowDefinition;
   username: string;
   password: string;
 }): Promise<void> {
@@ -38,8 +48,11 @@ async function dispatchAutomation(input: {
       dealerId: input.dealerId,
       gdmsUsername: input.username,
       gdmsPassword: input.password,
-      workflow: input.workflow,
-      kind: input.kind,
+      loginWorkflow: input.loginWorkflow,
+      operationWorkflow: input.operationWorkflow,
+      operation: input.operation,
+      sources: input.sources,
+      subSources: input.subSources,
     }),
   });
   if (!res.ok) {
@@ -47,68 +60,47 @@ async function dispatchAutomation(input: {
   }
 }
 
-const workflowWorker = new Worker(
+function resolveOperationWorkflow(operation: AutomationOperation): WorkflowDefinition {
+  if (operation === "enquiry_transfer") return enquiryTransferWorkflow();
+  const targetUrl = env.GDMS_WORKFLOW_URL ?? env.GDMS_BASE_URL ?? "https://example.com";
+  return operationStubWorkflow(operation, targetUrl);
+}
+
+const workflowWorker = new Worker<WorkflowJobData>(
   "workflow",
   async (job) => {
-    const { runId, dealerId, kind } = job.data as {
-      runId: string;
-      dealerId: string;
-      kind: string;
-    };
+    const { runId, dealerId, operation, sources, subSources } = job.data;
+
+    if (!isEnabledAutomationOperation(operation)) {
+      throw new Error(`Operation "${operation}" is disabled`);
+    }
 
     const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId } });
     if (!acc) throw new Error("GDMS account not configured");
 
     const masterKey = env.CREDENTIALS_MASTER_KEY;
-    const username = decryptSecret(parseEnc(acc.usernameCipher), masterKey);
-    const password = decryptSecret(parseEnc(acc.passwordCipher), masterKey);
+    const username = decryptSecret(parseEnc(acc.usernameCipher), masterKey).trim();
+    const password = decryptSecret(parseEnc(acc.passwordCipher), masterKey).trim();
 
+    const base = env.GDMS_BASE_URL ?? "https://example.com";
     const wfRow = await prisma.dealerWorkflow.findFirst({
-      where: { dealerId, name: kind, version: "1" },
+      where: { dealerId, name: operation, version: "1" },
     });
 
-    let workflow: WorkflowDefinition;
-    if (wfRow?.definition) {
-      workflow = wfRow.definition as unknown as WorkflowDefinition;
-    } else if (kind === "gdms_login") {
-      const base = env.GDMS_BASE_URL ?? "https://example.com";
-      workflow = defaultLoginWorkflow(base);
-    } else if (kind === "inquiry_fetch") {
-      const base = env.GDMS_BASE_URL ?? "https://example.com";
-      let list = env.GDMS_INQUIRY_LIST_URL;
-      if (!list) {
-        const looksLikeLoginPath = base.includes(".dms") || /login/i.test(base);
-        if (looksLikeLoginPath) {
-          throw new Error(
-            "Set GDMS_INQUIRY_LIST_URL — default /inquiries suffix is invalid when GDMS_BASE_URL is the login page.",
-          );
-        }
-        list = `${base.replace(/\/$/, "")}/inquiries`;
-      }
-      workflow = inquiryFetchWorkflow(list);
-    } else if (kind === "inquiry_transfer" || kind === "status_update") {
-      workflow = {
-        version: "1",
-        name: kind,
-        steps: [
-          {
-            id: "nav",
-            type: "navigate",
-            label: "Open target",
-            url: env.GDMS_WORKFLOW_URL ?? env.GDMS_BASE_URL ?? "https://example.com",
-          },
-          { id: "wait", type: "wait_selector", label: "Wait page", selector: "body" },
-        ],
-      };
-    } else {
-      throw new Error(`Unknown workflow kind ${kind}`);
-    }
+    const operationWorkflow: WorkflowDefinition = wfRow?.definition
+      ? (wfRow.definition as unknown as WorkflowDefinition)
+      : resolveOperationWorkflow(operation);
+
+    const loginWorkflow = defaultLoginWorkflow(base);
 
     await dispatchAutomation({
       runId,
       dealerId,
-      kind,
-      workflow,
+      operation,
+      sources,
+      subSources,
+      loginWorkflow,
+      operationWorkflow,
       username,
       password,
     });
@@ -118,7 +110,7 @@ const workflowWorker = new Worker(
 
 workflowWorker.on("failed", async (job, err) => {
   log.error({ jobId: job?.id, err }, "workflow job failed");
-  const runId = (job?.data as { runId?: string } | undefined)?.runId;
+  const runId = job?.data?.runId;
   if (runId) {
     await prisma.workflowRun.updateMany({
       where: { id: runId },

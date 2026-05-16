@@ -1,23 +1,56 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ENABLED_AUTOMATION_OPERATIONS,
+  AUTOMATION_SOURCES,
+  OPERATION_LABELS,
+  SUB_SOURCES_BY_PARENT,
+  SUB_SOURCE_PARENTS,
+  isAutomationFormValid,
+  sourceNeedsSubSource,
+  type AutomationOperation,
+  type AutomationSource,
+  type SubSourceParent,
+  type SubSourcesSelection,
+} from "@gdms/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { apiFetch } from "@/lib/api";
+import { Label } from "@/components/ui/label";
+import { ApiHttpError, apiFetch } from "@/lib/api";
+import type { GdmsAccountSummary } from "@/lib/gdms-account";
+import {
+  persistAutomationRun,
+  resumeSavedAutomationSession,
+} from "@/lib/saved-automation-session";
+import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
+import {
+  useAutomationSessionStore,
+  type SavedAutomationSession,
+} from "@/stores/automation-session-store";
 import { useLiveStore } from "@/stores/live-store";
 
 export default function DashboardPage() {
   const router = useRouter();
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
-  const setRun = useLiveStore((s) => s.setRun);
   const resetLogs = useLiveStore((s) => s.resetLogs);
-  const [dealers, setDealers] = useState<{ id: string; name: string } []>([]);
+  const clearSavedSession = useAutomationSessionStore((s) => s.clear);
+  const [dealers, setDealers] = useState<{ id: string; name: string }[]>([]);
+  const [gdmsByDealer, setGdmsByDealer] = useState<Map<string, GdmsAccountSummary>>(new Map());
   const [dealerId, setDealerId] = useState<string>("");
+  const savedSession = useAutomationSessionStore((s) =>
+    dealerId ? s.byDealer[dealerId] : undefined,
+  );
   const [msg, setMsg] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [operation, setOperation] = useState<AutomationOperation | "">("enquiry_transfer");
+  const [sources, setSources] = useState<AutomationSource[]>([]);
+  const [subSources, setSubSources] = useState<SubSourcesSelection>({});
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -25,8 +58,12 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!token) return;
-    void apiFetch<{ id: string; name: string }[]>("/v1/dealers", { token }).then((d) => {
+    void Promise.all([
+      apiFetch<{ id: string; name: string }[]>("/v1/dealers", { token }),
+      apiFetch<GdmsAccountSummary[]>("/v1/gdms-accounts", { token }),
+    ]).then(([d, accounts]) => {
       setDealers(d);
+      setGdmsByDealer(new Map(accounts.map((a) => [a.dealerId, a])));
       if (user?.dealerId) {
         setDealerId(user.dealerId);
       } else if (d[0]) {
@@ -35,23 +72,139 @@ export default function DashboardPage() {
     });
   }, [token, user?.dealerId]);
 
-  async function start(kind: string): Promise<void> {
+  useEffect(() => {
+    if (!token || !dealerId) return;
+    void apiFetch<{ clearedRunIds?: string[] }>("/v1/workflow-runs/reconcile-stale", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ dealerId }),
+    }).catch(() => {});
+  }, [token, dealerId]);
+
+  const selectedGdms = gdmsByDealer.get(dealerId);
+
+  const activeSubParents = useMemo(
+    () => SUB_SOURCE_PARENTS.filter((p) => sources.includes(p)),
+    [sources],
+  );
+
+  const formValid = isAutomationFormValid(operation, sources, subSources);
+  const canStart = formValid && Boolean(selectedGdms?.configured);
+
+  function onOperationChange(value: string): void {
+    const op = value as AutomationOperation | "";
+    setOperation(op);
+    setSources([]);
+    setSubSources({});
+  }
+
+  function toggleSource(source: AutomationSource): void {
+    setSources((prev) => {
+      const next = prev.includes(source)
+        ? prev.filter((s) => s !== source)
+        : [...prev, source];
+      if (!next.includes(source) && sourceNeedsSubSource(source)) {
+        setSubSources((sub) => {
+          const copy = { ...sub };
+          delete copy[source];
+          return copy;
+        });
+      }
+      return next;
+    });
+  }
+
+  function toggleSubSource(parent: SubSourceParent, sub: string): void {
+    setSubSources((prev) => {
+      const current = prev[parent] ?? [];
+      const next = current.includes(sub)
+        ? current.filter((s) => s !== sub)
+        : [...current, sub];
+      if (next.length === 0) {
+        const copy = { ...prev };
+        delete copy[parent];
+        return copy;
+      }
+      return { ...prev, [parent]: next };
+    });
+  }
+
+  function canResumeSaved(saved: SavedAutomationSession | undefined): boolean {
+    if (!saved) return false;
+    return Boolean(saved.otpVerifiedAt || saved.gdmsReadyAt);
+  }
+
+  async function resumeSession(): Promise<void> {
+    if (!token || !dealerId || !savedSession || resuming) return;
+    setMsg(null);
+    setResuming(true);
+    try {
+      await resumeSavedAutomationSession(token, savedSession);
+      router.push("/live-session");
+    } catch (e) {
+      setMsg(toUserMessage(e, "generic"));
+    } finally {
+      setResuming(false);
+    }
+  }
+
+  async function start(fresh = false): Promise<void> {
+    if (starting) return;
     if (!token || !dealerId) {
-      setMsg("Pehle dealer select karein / settings se GDMS configure karein.");
+      setMsg("Select a dealer and configure GDMS in Settings first.");
       return;
     }
+    if (!operation || !formValid) return;
     setMsg(null);
     resetLogs();
+    if (fresh) clearSavedSession(dealerId);
+    setStarting(true);
     try {
+      const body: {
+        dealerId: string;
+        operation: AutomationOperation;
+        sources: AutomationSource[];
+        subSources?: SubSourcesSelection;
+      } = {
+        dealerId,
+        operation,
+        sources,
+      };
+      if (Object.keys(subSources).length > 0) {
+        body.subSources = subSources;
+      }
       const run = await apiFetch<{ id: string }>("/v1/workflow-runs", {
         method: "POST",
         token,
-        body: JSON.stringify({ dealerId, kind }),
+        body: JSON.stringify(body),
       });
-      setRun(run.id);
+      persistAutomationRun({
+        runId: run.id,
+        dealerId,
+        operation,
+        sources,
+        subSources: Object.keys(subSources).length > 0 ? subSources : undefined,
+      });
       router.push("/live-session");
     } catch (e) {
-      setMsg(String(e));
+      if (e instanceof ApiHttpError && e.status === 409) {
+        const body = e.body as { runId?: string; error?: string } | null;
+        if (body?.runId && operation) {
+          persistAutomationRun({
+            runId: body.runId,
+            dealerId,
+            operation,
+            sources,
+            subSources: Object.keys(subSources).length > 0 ? subSources : undefined,
+          });
+          setMsg("Using your existing open automation — opening Live session.");
+          router.push("/live-session");
+          return;
+        }
+      }
+      setMsg(toUserMessage(e, "generic"));
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -62,9 +215,42 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">Dashboard</h1>
         <p className="text-sm text-zinc-600">
-          START se Playwright automation chalegi; OTP aane par modal popup open hoga.
+          Choose an operation and sources, then press START. Your last run id is saved locally so
+          you can resume without OTP when GDMS is still logged in.
         </p>
       </div>
+
+      {savedSession && canResumeSaved(savedSession) ? (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950">
+          <p className="font-medium">Saved automation session</p>
+          <p className="mt-1 text-sm text-blue-900">
+            Run <span className="font-mono text-xs">{savedSession.runId}</span>
+            {savedSession.gdmsReadyAt ? " · GDMS home was reached" : null}
+            {savedSession.otpVerifiedAt && !savedSession.gdmsReadyAt ? " · OTP already entered" : null}
+            . Resume to avoid entering OTP again when the browser is still open.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" disabled={resuming} onClick={() => void resumeSession()}>
+              {resuming ? "Resuming…" : "Resume saved session"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-blue-300 bg-white"
+              disabled={starting}
+              onClick={() => void start(true)}
+            >
+              Start fresh (new run)
+            </Button>
+            <Link
+              href="/live-session"
+              className="inline-flex items-center text-sm text-blue-800 underline"
+            >
+              Live session
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -76,14 +262,27 @@ export default function DashboardPage() {
             value={dealerId}
             onChange={(e) => setDealerId(e.target.value)}
           >
-            {dealers.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
+            {dealers.map((d) => {
+              const configured = gdmsByDealer.get(d.id)?.configured;
+              return (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                  {configured ? " · GDMS ready" : ""}
+                </option>
+              );
+            })}
           </select>
+          {selectedGdms?.configured ? (
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
+              GDMS: {selectedGdms.usernameMasked}
+            </span>
+          ) : (
+            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+              GDMS not configured
+            </span>
+          )}
           <Link href="/settings" className="text-sm text-blue-600 underline">
-            GDMS credentials / workflows
+            Settings
           </Link>
         </CardContent>
       </Card>
@@ -93,18 +292,90 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle>Automation</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            <Button onClick={() => void start("gdms_login")}>START — GDMS login + OTP</Button>
-            <Button variant="outline" onClick={() => void start("inquiry_fetch")}>
-              Inquiry fetch
+          <CardContent className="flex flex-col gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="operation">Operation</Label>
+              <select
+                id="operation"
+                className="w-full rounded border border-zinc-200 px-2 py-2 text-sm"
+                value={operation}
+                onChange={(e) => onOperationChange(e.target.value)}
+              >
+                <option value="">Select operation…</option>
+                {ENABLED_AUTOMATION_OPERATIONS.map((op) => (
+                  <option key={op} value={op}>
+                    {OPERATION_LABELS[op]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {operation ? (
+              <div className="space-y-1.5">
+                <Label>Sources</Label>
+                <div className="rounded border border-zinc-200 p-2">
+                  <ul className="flex flex-col gap-1.5">
+                    {AUTOMATION_SOURCES.map((source) => (
+                      <li key={source}>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-800">
+                          <input
+                            type="checkbox"
+                            className="rounded border-zinc-300"
+                            checked={sources.includes(source)}
+                            onChange={() => toggleSource(source)}
+                          />
+                          {source}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
+
+            {activeSubParents.map((parent) => (
+              <div key={parent} className="space-y-1.5">
+                <Label>Sub sources ({parent})</Label>
+                <div className="rounded border border-zinc-200 p-2">
+                  <ul className="flex flex-col gap-1.5">
+                    {SUB_SOURCES_BY_PARENT[parent].map((sub) => (
+                      <li key={sub}>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-800">
+                          <input
+                            type="checkbox"
+                            className="rounded border-zinc-300"
+                            checked={(subSources[parent] ?? []).includes(sub)}
+                            onChange={() => toggleSubSource(parent, sub)}
+                          />
+                          {sub}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ))}
+
+            <Button disabled={!canStart || starting} onClick={() => void start()}>
+              {starting ? "Starting…" : "START"}
             </Button>
-            <Button variant="outline" onClick={() => void start("inquiry_transfer")}>
-              Inquiry transfer
-            </Button>
-            <Button variant="outline" onClick={() => void start("status_update")}>
-              Status update
-            </Button>
-            {msg && <p className="text-sm text-amber-800">{msg}</p>}
+            {!selectedGdms?.configured && operation ? (
+              <p className="text-sm text-amber-800">Configure GDMS credentials in Settings to enable START.</p>
+            ) : null}
+            {msg ? (
+              <p className="text-sm text-amber-800">
+                {msg}
+                {msg.toLowerCase().includes("already running") ? (
+                  <>
+                    {" "}
+                    <Link className="font-medium underline" href="/live-session">
+                      Open Live session
+                    </Link>{" "}
+                    and press Stop if a browser session is still open.
+                  </>
+                ) : null}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
 

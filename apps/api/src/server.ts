@@ -53,6 +53,16 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err);
+  const e = err as NodeJS.ErrnoException;
+  if (e?.code === "EADDRINUSE") {
+    console.error(
+      `\n[@gdms/api] Port ${env.PORT} is already in use.\n` +
+        `  Another process is bound (often a previous "pnpm dev").\n` +
+        `  Windows: netstat -ano | findstr :${env.PORT}  then  taskkill /PID <pid> /F\n` +
+        `  Or change PORT in apps/api/.env and match API_UPSTREAM_URL / NEXT_PUBLIC_SOCKET_URL in apps/web/.env\n`,
+    );
+  } else {
+    console.error(err);
+  }
   process.exit(1);
 });

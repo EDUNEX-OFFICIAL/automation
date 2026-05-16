@@ -3,7 +3,7 @@ import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import type { AccessTokenPayload } from "@gdms/auth";
 import { verifyPassword } from "@gdms/auth";
-import { redis, WORKFLOW_REDIS_CHANNEL } from "./redis.js";
+import { attachRedisConnectionWarnings, redis, WORKFLOW_REDIS_CHANNEL } from "./redis.js";
 import { prisma } from "./prisma.js";
 import { env } from "./config.js";
 import {
@@ -18,6 +18,7 @@ import type {
   ScreenshotFramePayload,
   LogLinePayload,
   WorkflowCompletedPayload,
+  WorkflowPausedUserPayload,
 } from "@gdms/shared";
 
 export type IoServer = Server;
@@ -30,7 +31,8 @@ export function getIo(): Server {
 }
 
 export function attachSocket(httpServer: HttpServer): Server {
-  if (ioRef) return ioRef;  const corsOrigins = env.CORS_ORIGIN.split(",").map((s) => s.trim());
+  if (ioRef) return ioRef;
+  const corsOrigins = env.CORS_ORIGIN.split(",").map((s) => s.trim());
   const io = new Server(httpServer, {
     cors:
       env.NODE_ENV === "development"
@@ -129,6 +131,7 @@ export function attachSocket(httpServer: HttpServer): Server {
   });
 
   const sub = redis.duplicate();
+  attachRedisConnectionWarnings(sub, "api-subscribe");
   void sub.subscribe(WORKFLOW_REDIS_CHANNEL, (err?: Error | null) => {
     if (err) console.error("Redis subscribe error", err);
   });
@@ -162,9 +165,17 @@ export function attachSocket(httpServer: HttpServer): Server {
         const p = evt.payload as { workflowRunId?: string; error?: string };
         io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
         if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
+      } else if (evt.type === SocketEvents.WORKFLOW_PAUSED_USER && evt.dealerId) {
+        const p = evt.payload as WorkflowPausedUserPayload;
+        io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
+        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
       } else if (evt.type === SocketEvents.WORKFLOW_COMPLETED && evt.dealerId) {
         const p = evt.payload as WorkflowCompletedPayload;
         io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
+        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
+      } else if (evt.type === SocketEvents.GDMS_SESSION_REDIRECTED) {
+        const p = evt.payload as { workflowRunId?: string };
+        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
         if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
       } else if (evt.type === SocketEvents.LEAD_CLASSIFIED && evt.dealerId) {
         io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);

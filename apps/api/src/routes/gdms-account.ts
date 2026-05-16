@@ -2,13 +2,58 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authPreHandler } from "../lib/auth-pre.js";
 import { prisma } from "../prisma.js";
-import { encryptSecret, fingerprintUsername, canEditGdmsSecrets, canAccessDealer } from "@gdms/auth";
+import {
+  decryptSecret,
+  encryptSecret,
+  fingerprintUsername,
+  maskUsername,
+  type EncryptedPayload,
+  canEditGdmsSecrets,
+  canAccessDealer,
+} from "@gdms/auth";
 import { env } from "../config.js";
 
+type GdmsAccountSummary = {
+  dealerId: string;
+  dealerName: string;
+  configured: boolean;
+  usernameMasked?: string;
+  updatedAt?: string;
+  lastVerifiedAt?: string | null;
+};
+
+function summarizeGdmsAccount(
+  dealer: { id: string; name: string },
+  acc: {
+    usernameCipher: string;
+    updatedAt: Date;
+    lastVerifiedAt: Date | null;
+  } | null,
+): GdmsAccountSummary {
+  if (!acc) {
+    return { dealerId: dealer.id, dealerName: dealer.name, configured: false };
+  }
+  let usernameMasked = "Saved";
+  try {
+    const payload = JSON.parse(acc.usernameCipher) as EncryptedPayload;
+    usernameMasked = maskUsername(decryptSecret(payload, env.CREDENTIALS_MASTER_KEY));
+  } catch {
+    /* corrupt row — still configured */
+  }
+  return {
+    dealerId: dealer.id,
+    dealerName: dealer.name,
+    configured: true,
+    usernameMasked,
+    updatedAt: acc.updatedAt.toISOString(),
+    lastVerifiedAt: acc.lastVerifiedAt?.toISOString() ?? null,
+  };
+}
+
 const upsertSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
-  dealerId: z.string(),
+  username: z.string().trim().min(1, "username required"),
+  password: z.string().trim().min(1, "password required"),
+  dealerId: z.string().min(1),
 });
 
 export async function registerGdmsRoutes(app: FastifyInstance): Promise<void> {
@@ -39,7 +84,30 @@ export async function registerGdmsRoutes(app: FastifyInstance): Promise<void> {
         lastVerifiedAt: null,
       },
     });
-    return { id: account.id, dealerId: account.dealerId, updatedAt: account.updatedAt };
+    const dealer = await prisma.dealer.findUnique({ where: { id: account.dealerId } });
+    const summary = summarizeGdmsAccount(
+      dealer ?? { id: account.dealerId, name: "Dealer" },
+      account,
+    );
+    return { id: account.id, ...summary };
+  });
+
+  app.get("/v1/gdms-accounts", { preHandler: authPreHandler }, async (req) => {
+    const user = req.user!;
+    let dealers: { id: string; name: string }[];
+    if (user.role === "SUPER_ADMIN") {
+      dealers = await prisma.dealer.findMany({ orderBy: { name: "asc" } });
+    } else if (user.dealerId) {
+      const d = await prisma.dealer.findUnique({ where: { id: user.dealerId } });
+      dealers = d ? [d] : [];
+    } else {
+      dealers = [];
+    }
+    const accounts = await prisma.gdmsAccount.findMany({
+      where: { dealerId: { in: dealers.map((d) => d.id) } },
+    });
+    const byDealer = new Map(accounts.map((a) => [a.dealerId, a]));
+    return dealers.map((d) => summarizeGdmsAccount(d, byDealer.get(d.id) ?? null));
   });
 
   app.get("/v1/gdms-account", { preHandler: authPreHandler }, async (req, reply) => {
@@ -49,12 +117,9 @@ export async function registerGdmsRoutes(app: FastifyInstance): Promise<void> {
     if (!canAccessDealer(req.user!.dealerId, dealerId, req.user!.role)) {
       return reply.code(403).send({ error: "Forbidden" });
     }
+    const dealer = await prisma.dealer.findUnique({ where: { id: dealerId } });
+    if (!dealer) return reply.code(404).send({ error: "Dealer not found" });
     const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId } });
-    if (!acc) return { configured: false };
-    return {
-      configured: true,
-      usernameFingerprint: acc.usernameFingerprint,
-      lastVerifiedAt: acc.lastVerifiedAt,
-    };
+    return summarizeGdmsAccount(dealer, acc);
   });
 }

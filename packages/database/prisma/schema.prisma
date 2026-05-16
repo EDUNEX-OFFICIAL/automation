@@ -134,6 +134,7 @@ model WorkflowRun {
   dealer           Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   status           WorkflowRunStatus   @default(PENDING)
   currentStep      String?
+  runParams        Json?
   browserSessionKey String?
   errorMessage     String?
   startedAt        DateTime            @default(now())

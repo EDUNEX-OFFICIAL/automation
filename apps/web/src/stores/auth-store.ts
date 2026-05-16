@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-/** Embedded preview / iframe mein `localStorage` SecurityError → persist poora attach nahi hota; memory fallback. */
+/** Embedded preview / iframe `localStorage` SecurityError → persist cannot attach fully; memory fallback. */
 function memoryStorage(): Storage {
   const m = new Map<string, string>();
   return {
@@ -29,7 +29,7 @@ function webLocalStorage(): Storage {
   }
 }
 
-/** Corrupt persisted JSON → persist hydration kabhi complete nahi hoti → poori app white screen. */
+/** Corrupt persisted JSON → persist hydration never completes → full app white screen. */
 function safeWebStorageForPersist(): Storage {
   const inner = webLocalStorage();
   return {
@@ -90,7 +90,7 @@ export const useAuthStore = create<AuthState>()(
       name: "gdms-auth",
       storage: createJSONStorage(() => safeWebStorageForPersist()),
       partialize: (state) => ({ accessToken: state.accessToken, user: state.user }),
-      /** Late rehydrate purana khali snapshot na aaye; live memory (abhi login) ko precedence. */
+      /** Late rehydrate must not overwrite live memory with an old empty snapshot; prefer current login state. */
       merge: (persisted, current) => {
         const p = persisted as Partial<Pick<AuthState, "accessToken" | "user">> | undefined;
         return {

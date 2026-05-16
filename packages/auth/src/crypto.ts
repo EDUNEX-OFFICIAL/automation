@@ -43,3 +43,19 @@ export function decryptSecret(payload: EncryptedPayload, masterKeyBase64: string
 export function fingerprintUsername(username: string): string {
   return crypto.createHash("sha256").update(username.toLowerCase().trim()).digest("hex");
 }
+
+/** Safe display hint — never returns full username/password. */
+export function maskUsername(username: string): string {
+  const t = username.trim();
+  if (!t) return "—";
+  if (t.includes("@")) {
+    const at = t.indexOf("@");
+    const local = t.slice(0, at);
+    const domain = t.slice(at + 1);
+    const head = local.length <= 2 ? local : local.slice(0, 2);
+    const dots = "•".repeat(Math.min(5, Math.max(2, local.length - head.length)));
+    return `${head}${dots}@${domain}`;
+  }
+  if (t.length <= 3) return "•••";
+  return `${t.slice(0, 2)}${"•".repeat(Math.max(2, t.length - 3))}${t.slice(-1)}`;
+}

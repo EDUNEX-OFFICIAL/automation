@@ -11,3 +11,116 @@ body {
   color: var(--foreground);
   background: var(--background);
 }
+
+/* Nav bloom drawer — scale + fade from header, not edge slide */
+@keyframes nav-bloom-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.94);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes nav-bloom-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+@keyframes nav-item-rise {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.nav-bloom-panel {
+  transform-origin: top center;
+  transition:
+    opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.45s ease;
+}
+
+.nav-bloom-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+  animation: nav-bloom-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.nav-bloom-closed {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.94);
+  filter: blur(4px);
+  pointer-events: none;
+}
+
+.nav-bloom-item {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+.nav-bloom-item-visible {
+  animation: nav-item-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Hamburger → X morph */
+.menu-toggle-bar {
+  position: absolute;
+  left: 50%;
+  height: 2px;
+  width: 1.125rem;
+  border-radius: 9999px;
+  background: currentColor;
+  transform: translateX(-50%);
+  transition:
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.25s ease,
+    width 0.35s ease;
+}
+
+.menu-toggle-bar-1 {
+  top: calc(50% - 6px);
+}
+
+.menu-toggle-bar-2 {
+  top: 50%;
+  margin-top: -1px;
+}
+
+.menu-toggle-bar-3 {
+  top: calc(50% + 6px);
+}
+
+.menu-toggle-active .menu-toggle-bar-1 {
+  top: 50%;
+  margin-top: -1px;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.menu-toggle-active .menu-toggle-bar-2 {
+  opacity: 0;
+  width: 0;
+}
+
+.menu-toggle-active .menu-toggle-bar-3 {
+  top: 50%;
+  margin-top: -1px;
+  transform: translateX(-50%) rotate(-45deg);
+}
