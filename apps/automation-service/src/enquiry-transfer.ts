@@ -2386,18 +2386,57 @@ async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
   }
 }
 
-async function isNextFollowUpTimeFilled(modal: Locator): Promise<boolean> {
+function parseGdmsDateTime(
+  raw: string,
+): { day: number; month: number; year: number; hour?: number; minute?: number } | null {
+  const m = raw
+    .trim()
+    .match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?)?/i);
+  if (!m) return null;
+  let hour = m[4] !== undefined ? Number(m[4]) : undefined;
+  const minute = m[5] !== undefined ? Number(m[5]) : undefined;
+  const ampm = (m[6] ?? "").toUpperCase();
+  if (hour !== undefined && ampm === "PM" && hour < 12) hour += 12;
+  if (hour !== undefined && ampm === "AM" && hour === 12) hour = 0;
+  return {
+    day: Number(m[1]),
+    month: Number(m[2]),
+    year: Number(m[3]),
+    hour,
+    minute,
+  };
+}
+
+async function readNextFollowUpTimeRaw(modal: Locator): Promise<string> {
   const formRoot = await enquiryModalFormRoot(modal);
   const label = formRoot.locator("dt, th, td, label").filter({ hasText: /Next Follow Up Time/i }).first();
-  if (!(await label.isVisible({ timeout: 1_500 }).catch(() => false))) return false;
+  if (!(await label.isVisible({ timeout: 1_500 }).catch(() => false))) return "";
   const row = label.locator("xpath=ancestor::tr[1]");
   const inputs = row.locator("input");
   const n = await inputs.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
     const v = (await inputs.nth(i).inputValue().catch(() => "")).trim();
-    if (v.length >= 8 && /\d/.test(v)) return true;
+    if (v.length >= 8 && /\d/.test(v)) return v;
   }
-  return false;
+  const text = (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+  const match = text.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}(?:\s+\d{1,2}:\d{2})?/);
+  return match?.[0] ?? "";
+}
+
+/** Wrong/stale dates (e.g. 2025) must be re-set — GDMS SQL error on Save if Next < Follow Up. */
+async function isNextFollowUpTimeValid(modal: Locator): Promise<boolean> {
+  const raw = await readNextFollowUpTimeRaw(modal);
+  if (!raw) return false;
+  const parsed = parseGdmsDateTime(raw);
+  if (!parsed) return false;
+  const target = nextFollowUpDateIst();
+  if (parsed.day !== target.day || parsed.month !== target.month || parsed.year !== target.year) {
+    return false;
+  }
+  if (parsed.hour !== undefined && parsed.minute !== undefined) {
+    if (!(parsed.hour === 21 && parsed.minute === 30)) return false;
+  }
+  return true;
 }
 
 async function selectRandomReasonForNo(
@@ -3056,9 +3095,16 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await selectMandatoryVerificationY(modal);
   await pause("normal");
 
-  if (await isNextFollowUpTimeFilled(modal)) {
-    await log("info", "Next Follow Up Time already set — skipping calendar.");
+  if (await isNextFollowUpTimeValid(modal)) {
+    await log("info", "Next Follow Up Time already valid for IST rules — skipping calendar.");
   } else {
+    const stale = (await readNextFollowUpTimeRaw(modal)).trim();
+    if (stale) {
+      await log(
+        "warn",
+        `Next Follow Up Time invalid or stale ("${stale}") — re-setting (past/wrong year causes GDMS SQL error on Save).`,
+      );
+    }
     await setNextFollowUpTime(page, log);
   }
   await pause("normal");
