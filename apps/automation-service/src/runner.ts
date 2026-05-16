@@ -28,9 +28,7 @@ import {
 } from "./gdms-session-watch.js";
 import {
   attachInputGuardListeners,
-  engageAutomationInputLock,
   installAutomationBrowserScripts,
-  releaseUserInputForManualControl,
 } from "./automation-browser-setup.js";
 import {
   getActiveSession,
@@ -464,7 +462,6 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     }
 
     const signalManualIntervention = async (message: string): Promise<never> => {
-      if (page) await releaseUserInputForManualControl(page);
       await prisma.workflowRun.update({
         where: { id: payload.runId },
         data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
@@ -473,16 +470,11 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
         workflowRunId: payload.runId,
         message,
       });
-      await log(
-        "info",
-        "GDMS keyboard unlocked — you can type in Follow Up Remarks and other fields manually.",
-      );
       await log("error", message);
       throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
     };
 
     if (payload.operation === "enquiry_transfer") {
-      if (page) await engageAutomationInputLock(page);
       await log("info", "Starting enquiry transfer automation (runs until Stop).");
       await humanDelay(800, 1500);
       await runEnquiryTransfer({
@@ -603,13 +595,6 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       browserRetained = true;
       const activePage = page;
       const activeContext = context;
-      if (payload.operation === "enquiry_transfer" && (pausedUser || pauseInsteadOfFail)) {
-        await releaseUserInputForManualControl(activePage);
-        await log(
-          "info",
-          "GDMS keyboard unlocked — edit Remarks / dates manually, then Retry transfer.",
-        );
-      }
       const stopScreenshots = (): void => {
         if (shotLoop) {
           clearInterval(shotLoop);

@@ -53,11 +53,8 @@ export async function installAutomationBrowserScripts(context: BrowserContext): 
       });
 
       const blockKeys = (e: Event): void => {
-        const w = window as Window & {
-          __gdmsBotAutomating?: boolean;
-          __gdmsBotUserControl?: boolean;
-        };
-        if (w.__gdmsBotAutomating || w.__gdmsBotUserControl) return;
+        const w = window as Window & { __gdmsBotAutomating?: boolean };
+        if (w.__gdmsBotAutomating) return;
         e.preventDefault();
         e.stopImmediatePropagation();
       };
@@ -81,66 +78,16 @@ export async function installAutomationBrowserScripts(context: BrowserContext): 
   }, { guardEnabled: blockInput });
 }
 
-type GuardWindow = Window & {
-  __gdmsBotAutomating?: boolean;
-  __gdmsBotUserControl?: boolean;
-};
-
-function applyGuardFlags(
-  w: GuardWindow,
-  opts: { automating: boolean; userControl: boolean },
-): void {
-  w.__gdmsBotAutomating = opts.automating;
-  w.__gdmsBotUserControl = opts.userControl;
-}
-
 /** Let Playwright click through — hide overlay briefly during automation actions. */
 export async function setAutomationInputBypass(page: Page, enabled: boolean): Promise<void> {
   for (const frame of page.frames()) {
     try {
       await frame.evaluate(({ on, guardId }) => {
-        const w = window as GuardWindow;
-        if (!w.__gdmsBotUserControl) {
-          w.__gdmsBotAutomating = on;
-        }
+        const w = window as Window & { __gdmsBotAutomating?: boolean };
+        w.__gdmsBotAutomating = on;
         const guard = document.getElementById(guardId);
-        if (guard && !w.__gdmsBotUserControl) {
-          guard.style.display = on ? "none" : "";
-        }
+        if (guard) guard.style.display = on ? "none" : "";
       }, { on: enabled, guardId: GUARD_ID });
-    } catch {
-      /* detached frame */
-    }
-  }
-}
-
-/** PAUSED_USER / manual fix — allow typing in Remarks and other GDMS fields. */
-export async function releaseUserInputForManualControl(page: Page): Promise<void> {
-  for (const frame of page.frames()) {
-    try {
-      await frame.evaluate((guardId) => {
-        const w = window as GuardWindow;
-        applyGuardFlags(w, { automating: true, userControl: true });
-        const guard = document.getElementById(guardId);
-        if (guard) guard.style.display = "none";
-      }, GUARD_ID);
-    } catch {
-      /* detached frame */
-    }
-  }
-}
-
-/** Bot running again — re-enable keyboard block between automated steps. */
-export async function engageAutomationInputLock(page: Page): Promise<void> {
-  if (!isInputGuardEnabled()) return;
-  for (const frame of page.frames()) {
-    try {
-      await frame.evaluate((guardId) => {
-        const w = window as GuardWindow;
-        applyGuardFlags(w, { automating: false, userControl: false });
-        const guard = document.getElementById(guardId);
-        if (guard) guard.style.display = "";
-      }, GUARD_ID);
     } catch {
       /* detached frame */
     }
@@ -169,8 +116,8 @@ export async function applyInputGuardToPage(page: Page): Promise<void> {
         });
 
         const blockKeys = (e: Event): void => {
-          const w = window as GuardWindow;
-          if (w.__gdmsBotAutomating || w.__gdmsBotUserControl) return;
+          const w = window as Window & { __gdmsBotAutomating?: boolean };
+          if (w.__gdmsBotAutomating) return;
           e.preventDefault();
           e.stopImmediatePropagation();
         };

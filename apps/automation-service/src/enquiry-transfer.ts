@@ -11,6 +11,7 @@ import {
   pause,
   pickRandom,
   pollDelay,
+  randomBetween,
   scaleMs,
   scaledRandomBetween,
   searchIntervalDelay,
@@ -35,6 +36,9 @@ const PIN_CODES = ["800001", "800006", "800020", "800026"] as const;
 const FOLLOW_UP_REMARKS = "Call Back...";
 /** Follow Up tab required field (GDMS shows "*Enquiry Type"). */
 const ENQUIRY_TYPE_LABEL_RE = /^\*?\s*Enquiry\s*Type\s*$/i;
+/** Random pause after Follow Up data complete, before #btnFollowUpSave (max 4s). */
+const FOLLOW_UP_SAVE_DELAY_MAX_MS = 4_000;
+const FOLLOW_UP_SAVE_DELAY_MIN_MS = 1_200;
 const SUCCESS_TOAST = /successfully reflected/i;
 /** After final save, wait for CRM to dismiss enquiry UI; if stuck, re-Save up to this many times (each followed by 10–20s wait). */
 const MAX_ENQUIRY_SURFACE_STUCK_RESAVES = 3;
@@ -605,6 +609,10 @@ function enquiryWindowWithBasicSaveIn(ui: GdmsUiRoot): Locator {
   return ui.locator(".k-window:has(#btnBasicSave), [role='dialog']:has(#btnBasicSave)");
 }
 
+function enquiryWindowWithFollowUpSaveIn(ui: GdmsUiRoot): Locator {
+  return ui.locator(".k-window:has(#btnFollowUpSave), [role='dialog']:has(#btnFollowUpSave)");
+}
+
 /** PIN search popup (ref 8–9) — same title as enquiry modal but no TD Offer on Basic Info. */
 async function isPinLookupSurface(candidate: Locator): Promise<boolean> {
   const onPinId = candidate.locator("#pinCodeSearchPopup");
@@ -638,7 +646,11 @@ async function isPinLookupSurface(candidate: Locator): Promise<boolean> {
 async function collectEnquiryModalCandidates(page: Page): Promise<Locator[]> {
   const out: Locator[] = [];
   for (const ui of listUiContexts(page)) {
-    for (const factory of [enquiryWindowWithBasicSaveIn, enquiryInfoModalIn] as const) {
+    for (const factory of [
+      enquiryWindowWithFollowUpSaveIn,
+      enquiryWindowWithBasicSaveIn,
+      enquiryInfoModalIn,
+    ] as const) {
       const loc = factory(ui);
       const n = await loc.count().catch(() => 0);
       for (let i = 0; i < n; i++) out.push(loc.nth(i));
@@ -1450,472 +1462,109 @@ async function tryOpenKendoWidgetViaDom(trigger: Locator): Promise<boolean> {
     if (!host) return false;
     const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => { open?: () => void } } })
       .jQuery;
-    const widget =
-      jq?.(host)?.data("kendoDropDownList") ??
-      jq?.(host.querySelector(".k-dropdown") ?? host)?.data("kendoDropDownList");
+    const inqryHidden = host.querySelector<HTMLInputElement>(
+      'input[id*="InqryType"], input[id*="inqryType"]',
+    );
+    const widgetKeys = ["kendoDropDownList", "extdropdownlist", "ExtDropDownList", "extDropDownList"];
+    let widget: { open?: () => void } | undefined;
+    for (const key of widgetKeys) {
+      widget =
+        (inqryHidden ? jq?.(inqryHidden)?.data(key) : undefined) ??
+        jq?.(host)?.data(key) ??
+        jq?.(host.querySelector(".k-dropdown") ?? host)?.data(key);
+      if (widget?.open) break;
+    }
     if (widget?.open) {
       widget.open();
       return true;
     }
     const arrow = host.querySelector<HTMLElement>("span.k-select, .k-select");
-    const input = host.querySelector<HTMLElement>("span.k-input, input[role='combobox']");
-    (arrow ?? input ?? (el as HTMLElement))?.click();
+    const display = host.querySelector<HTMLElement>("span.k-input, input[role='combobox']");
+    (arrow ?? display ?? (el as HTMLElement))?.click();
     return false;
   }).catch(() => false);
 }
 
-/** Select option via Kendo DropDownList API when list popup is flaky (e.g. bottom Follow Up row). */
-async function trySelectKendoDropdownOptionViaWidget(
-  trigger: Locator,
-  option: RegExp,
-): Promise<boolean> {
-  return trigger
-    .evaluate((el, patternSource) => {
-      const optRe = new RegExp(patternSource, "i");
-      const host =
-        el.closest(".k-dropdown") ??
-        el.closest(".k-dropdown-wrap") ??
-        el.closest("dd") ??
-        el.parentElement;
-      if (!host) return false;
-      const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } }).jQuery;
-      type Widget = {
-        dataSource: { data: () => unknown[]; view?: () => unknown[] };
-        select: (index: number) => void;
-        trigger: (event: string) => void;
-        text?: () => string;
-        value?: (v?: string) => string;
-      };
-      const widget =
-        (jq?.(host)?.data("kendoDropDownList") as Widget | undefined) ??
-        (jq?.(host.querySelector(".k-dropdown") ?? host)?.data("kendoDropDownList") as Widget | undefined);
-      if (!widget) return false;
-
-      const itemLabel = (item: Record<string, unknown>): string =>
-        String(item.Text ?? item.text ?? item.Name ?? item.name ?? item.VALUE ?? item.value ?? "").trim();
-
-      const data = (widget.dataSource.view?.() ?? widget.dataSource.data?.() ?? []) as Record<
-        string,
-        unknown
-      >[];
-      for (let i = 0; i < data.length; i++) {
-        const item = data[i]!;
-        if (!optRe.test(itemLabel(item))) continue;
-        const val = itemLabel(item) || String(item.value ?? item.Value ?? "");
-        try {
-          if (typeof widget.value === "function" && val) widget.value(val);
-        } catch {
-          /* value() may not accept display text */
-        }
-        widget.select(i);
-        widget.trigger("change");
-        const shown = (widget.text?.() ?? "").trim();
-        if (optRe.test(shown)) return true;
-      }
-
-      const popups = document.querySelectorAll(
-        ".k-animation-container:not([style*='display: none']), .k-popup:not([style*='display: none'])",
-      );
-      for (const popup of Array.from(popups).reverse()) {
-        for (const li of Array.from(popup.querySelectorAll("li, .k-list-item, [role='option']"))) {
-          const t = (li.textContent ?? "").replace(/\s+/g, " ").trim();
-          if (!t || !optRe.test(t)) continue;
-          (li as HTMLElement).click();
-          return true;
-        }
-      }
-      return false;
-    }, option.source)
-    .catch(() => false);
-}
-
-/** Click a visible Kendo list row by exact option text (Hot/Warm/Cold — not hasText on li). */
-async function clickKendoListOptionByText(
-  page: Page,
-  optRe: RegExp,
-  log?: EnquiryTransferContext["log"],
-): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    for (const ui of listUiContexts(page)) {
-      const popups = ui.locator(
-        ".k-animation-container:visible, .k-popup:visible, .k-list-container:visible",
-      );
-      const popupCount = await popups.count().catch(() => 0);
-      for (let p = popupCount - 1; p >= 0; p--) {
-        const popup = popups.nth(p);
-        const items = popup.locator("li, .k-list-item, [role='option']");
-        const n = await items.count().catch(() => 0);
-        for (let i = 0; i < n; i++) {
-          const item = items.nth(i);
-          const text = (await item.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-          if (!text || !optRe.test(text)) continue;
-          if (!(await item.isVisible({ timeout: 400 }).catch(() => false))) continue;
-          await item.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
-          if (log) await log("info", `Kendo list — clicking "${text}".`);
-          await item
-            .evaluate((el) => {
-              const node = el as HTMLElement;
-              node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-              node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-              node.click();
-              node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-            })
-            .catch(() => {});
-          await humanHoverClick(item);
-          await humanDelay(300, 700);
-          return;
-        }
-      }
-      const roleOpt = ui.getByRole("option", { name: optRe }).first();
-      if (await roleOpt.isVisible({ timeout: 400 }).catch(() => false)) {
-        if (log) await log("info", `Kendo list — clicking role=option ${String(optRe)}.`);
-        await humanHoverClick(roleOpt);
-        return;
-      }
-    }
-    await pollDelay(280);
-  }
-  throw new Error(`Kendo list option not found or not clickable: ${String(optRe)}`);
-}
-
-/** GDMS ids: eqfuAflrEnqryType, eqfuAftInqryType (+ _listbox). Uses extdropdownlist, not only kendoDropDownList. */
-const ENQUIRY_TYPE_FIELD_ID_RE = /EnqryType|InqryType|inqryType/i;
-
-type EnquiryTypeDomState = {
-  displayText: string;
-  hiddenValue: string;
-  isColdCommitted: boolean;
-  listOpen: boolean;
-};
-
-async function readEnquiryTypeDomState(modal: Locator): Promise<EnquiryTypeDomState | null> {
-  const page = modal.page();
+async function finalizeEnquiryTypeSelection(page: Page): Promise<void> {
   for (const ui of listUiContexts(page)) {
-    const state = await ui
-      .evaluate((idReSource) => {
-        const idRe = new RegExp(idReSource, "i");
-        const isListboxId = (id: string) => /listbox$/i.test(id);
-        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[id]")).filter(
-          (el) => idRe.test(el.id) && !isListboxId(el.id),
+    await ui
+      .evaluate(() => {
+        const input = document.querySelector<HTMLInputElement>(
+          'input[id*="InqryType"], input[id*="inqryType"]',
         );
-        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } }).jQuery;
-
-        type Widget = {
-          select: (i?: number) => number;
-          dataItem: () => Record<string, unknown> | null | undefined;
-          text: () => string;
-          value: (v?: string) => string;
-          trigger: (e: string) => void;
-          close?: () => void;
-          dataSource?: { data: () => Record<string, unknown>[] };
-        };
-
-        const itemLabel = (item: Record<string, unknown> | null | undefined): string =>
-          item
-            ? String(item.Text ?? item.text ?? item.Name ?? item.name ?? item.VALUE ?? item.value ?? "").trim()
-            : "";
-
-        const resolveWidget = (input: HTMLInputElement, host: Element | null): Widget | null => {
-          if (!jq) return null;
-          const keys = [
-            "extdropdownlist",
-            "extDropDownList",
-            "ExtDropDownList",
-            "kendoDropDownList",
-          ];
-          const nodes = [input, host].filter(Boolean) as Element[];
-          for (const node of nodes) {
-            for (const key of keys) {
-              const w = jq(node)?.data(key) as Widget | undefined;
-              if (w && typeof w.select === "function") return w;
-            }
-            const $node = jq(node) as { data: (key?: string) => unknown };
-            const bag = $node.data() as Record<string, unknown> | undefined;
-            if (bag) {
-              for (const val of Object.values(bag)) {
-                if (val && typeof val === "object" && typeof (val as Widget).select === "function") {
-                  return val as Widget;
-                }
-              }
-            }
-          }
-          return null;
-        };
-
-        for (const input of inputs) {
-          const host =
-            (input.closest(".k-dropdown, .k-widget") as Element | null) ?? input.parentElement;
-          const listOpen = host?.getAttribute("aria-expanded") === "true";
-          const spanText = (host?.querySelector("span.k-input")?.textContent ?? "")
-            .replace(/\s+/g, " ")
-            .trim();
-          let hiddenValue = (input.value ?? "").trim();
-          const widget = resolveWidget(input, host);
-          let displayText = spanText;
-
-          if (widget && !listOpen) {
-            widget.select();
-            const fromItem = itemLabel(widget.dataItem());
-            const wText = (widget.text?.() ?? "").trim();
-            if (fromItem) displayText = fromItem;
-            else if (wText) displayText = wText;
-            if (!hiddenValue) {
-              const item = widget.dataItem();
-              const code = item
-                ? String(item.Value ?? item.value ?? item.CODE ?? item.code ?? "").trim()
-                : "";
-              if (code) hiddenValue = code;
-            }
-          }
-
-          const displayCold = /^cold$/i.test(displayText);
-          const hiddenOk = hiddenValue.length > 0;
-          const isColdCommitted = displayCold && hiddenOk && !listOpen;
-
-          return { displayText, hiddenValue, isColdCommitted, listOpen };
+        if (!input) return;
+        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } })
+          .jQuery;
+        const keys = ["kendoDropDownList", "extdropdownlist", "ExtDropDownList", "extDropDownList"];
+        for (const key of keys) {
+          const w = jq?.(input)?.data(key) as { close?: () => void; trigger?: (e: string) => void } | undefined;
+          if (w?.close) w.close();
+          if (w?.trigger) w.trigger("change");
         }
-        return null;
-      }, ENQUIRY_TYPE_FIELD_ID_RE.source)
-      .catch(() => null);
-    if (state) return state;
-  }
-  return null;
-}
-
-async function readCommittedEnquiryTypeValue(modal: Locator): Promise<string> {
-  const state = await readEnquiryTypeDomState(modal);
-  if (state?.displayText) return state.displayText;
-  return readFollowUpEnquiryTypeDisplay(modal);
-}
-
-/** Commit Cold on GDMS extdropdownlist / Kendo — sync hidden input value (not hover preview only). */
-async function commitEnquiryTypeColdInDom(page: Page): Promise<boolean> {
-  for (const ui of listUiContexts(page)) {
-    const ok = await ui
-      .evaluate((idReSource) => {
-        const idRe = new RegExp(idReSource, "i");
-        const isListboxId = (id: string) => /listbox$/i.test(id);
-        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } }).jQuery;
-
-        type Widget = {
-          dataSource?: { data: () => Record<string, unknown>[] };
-          select: (i: number) => void;
-          trigger: (e: string) => void;
-          close?: () => void;
-          dataItem: () => Record<string, unknown> | null | undefined;
-          text: () => string;
-          value: (v?: string) => string;
-          open?: () => void;
-        };
-
-        const itemLabel = (item: Record<string, unknown>): string =>
-          String(item.Text ?? item.text ?? item.Name ?? item.name ?? "").trim();
-
-        const itemCode = (item: Record<string, unknown>): string =>
-          String(item.Value ?? item.value ?? item.CODE ?? item.code ?? item.ID ?? item.id ?? "").trim();
-
-        const resolveWidget = (input: HTMLInputElement, host: Element | null): Widget | null => {
-          if (!jq) return null;
-          const keys = ["extdropdownlist", "extDropDownList", "ExtDropDownList", "kendoDropDownList"];
-          for (const node of [input, host].filter(Boolean) as Element[]) {
-            for (const key of keys) {
-              const w = jq(node)?.data(key) as Widget | undefined;
-              if (w?.select) return w;
-            }
-          }
-          return null;
-        };
-
-        const syncHidden = (input: HTMLInputElement, item: Record<string, unknown> | null | undefined): void => {
-          const code = item ? itemCode(item) : "";
-          if (code) input.value = code;
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          (jq?.(input) as { trigger?: (e: string) => void } | undefined)?.trigger?.("change");
-        };
-
-        const verifyCold = (input: HTMLInputElement, host: Element | null, widget: Widget | null): boolean => {
-          if (host?.getAttribute("aria-expanded") === "true") return false;
-          const spanText = (host?.querySelector("span.k-input")?.textContent ?? "")
-            .replace(/\s+/g, " ")
-            .trim();
-          const hidden = (input.value ?? "").trim();
-          const wText = widget ? (widget.text?.() ?? "").trim() : "";
-          const displayCold = /^cold$/i.test(spanText) || /^cold$/i.test(wText);
-          return displayCold && hidden.length > 0;
-        };
-
-        const clickColdLi = (listbox: Element): boolean => {
-          const items = Array.from(listbox.querySelectorAll("li, .k-list-item, [role='option']"));
-          let coldLi: HTMLElement | null = null;
-          for (const el of items) {
-            const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-            if (/^cold$/i.test(t)) coldLi = el as HTMLElement;
-          }
-          if (!coldLi && items.length > 0) {
-            coldLi = items[items.length - 1] as HTMLElement;
-          }
-          if (!coldLi) return false;
-          const scroller =
-            listbox.querySelector<HTMLElement>(".k-list-scroller, .k-list-content") ??
-            (listbox as HTMLElement);
-          scroller.scrollTop = scroller.scrollHeight;
-          coldLi.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          coldLi.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-          coldLi.click();
-          const dv =
-            coldLi.getAttribute("data-value") ??
-            (coldLi as HTMLElement & { dataset: { value?: string } }).dataset.value ??
-            "";
-          return !!dv || /^cold$/i.test((coldLi.textContent ?? "").trim());
-        };
-
-        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[id]")).filter(
-          (el) => idRe.test(el.id) && !isListboxId(el.id),
-        );
-
-        for (const input of inputs) {
-          const host =
-            (input.closest(".k-dropdown, .k-widget") as Element | null) ?? input.parentElement;
-          const widget = resolveWidget(input, host);
-          const data = widget?.dataSource?.data?.() ?? [];
-
-          if (widget && data.length > 0) {
-            let coldIdx = -1;
-            for (let i = 0; i < data.length; i++) {
-              if (/^cold$/i.test(itemLabel(data[i]!))) coldIdx = i;
-            }
-            if (coldIdx < 0) coldIdx = data.length - 1;
-            widget.select(coldIdx);
-            widget.trigger("change");
-            syncHidden(input, data[coldIdx]!);
-            widget.close?.();
-            if (verifyCold(input, host, widget)) return true;
-          }
-
-          widget?.open?.();
-          const arrow = host?.querySelector<HTMLElement>("span.k-select, .k-select");
-          arrow?.click();
-          const listbox =
-            (host?.getAttribute("aria-owns")
-              ? document.getElementById(host.getAttribute("aria-owns")!)
-              : null) ??
-            document.querySelector('[id*="EnqryType"][id*="listbox"]') ??
-            document.querySelector('[id*="InqryType"][id*="listbox"]');
-          if (listbox && clickColdLi(listbox)) {
-            const items = Array.from(listbox.querySelectorAll("li, .k-list-item"));
-            const coldItem = items.find((el) => /^cold$/i.test((el.textContent ?? "").trim()));
-            const li = coldItem ?? items[items.length - 1];
-            const code =
-              li?.getAttribute("data-value") ??
-              (li as HTMLElement & { dataset: { value?: string } })?.dataset?.value ??
-              "";
-            if (code) input.value = code;
-            else if (li && /^cold$/i.test((li.textContent ?? "").trim())) input.value = "Cold";
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-            (jq?.(input) as { trigger?: (e: string) => void } | undefined)?.trigger?.("change");
-            widget?.trigger?.("change");
-            widget?.close?.();
-            const w = resolveWidget(input, host);
-            if (verifyCold(input, host, w)) return true;
-          }
-
-          if (widget) {
-            const idx = data.length - 1;
-            if (idx >= 0) {
-              widget.select(idx);
-              widget.trigger("change");
-              syncHidden(input, data[idx]!);
-              widget.close?.();
-              if (verifyCold(input, host, widget)) return true;
-            }
-          }
-        }
-        return false;
-      }, ENQUIRY_TYPE_FIELD_ID_RE.source)
-      .catch(() => false);
-    if (ok) return true;
-  }
-  return false;
-}
-
-async function clickColdInInqryTypeListbox(
-  page: Page,
-  log: EnquiryTransferContext["log"],
-): Promise<boolean> {
-  for (const ui of listUiContexts(page)) {
-    const listbox = ui
-      .locator(
-        '[id*="InqryType"][id*="listbox"]:visible, [id*="inqryType"][id*="listbox"]:visible, ul[id*="InqryType"]:visible',
-      )
-      .last();
-    if (!(await listbox.isVisible({ timeout: 800 }).catch(() => false))) continue;
-
-    await listbox
-      .evaluate((el) => {
-        const scroller =
-          el.querySelector<HTMLElement>(".k-list-scroller, .k-list-content, .k-list") ?? (el as HTMLElement);
-        scroller.scrollTop = scroller.scrollHeight;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
       })
       .catch(() => {});
-
-    const items = listbox.locator("li, .k-list-item, [role='option']");
-    const n = await items.count().catch(() => 0);
-    for (let i = n - 1; i >= 0; i--) {
-      const item = items.nth(i);
-      const text = (await item.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-      if (!text) continue;
-      if (!/^cold$/i.test(text)) continue;
-      await item.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
-      await log("info", `Enquiry Type listbox — clicking last option "${text}".`);
-      await item
-        .evaluate((el) => {
-          const node = el as HTMLElement;
-          node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          node.click();
-          node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-        })
-        .catch(() => {});
-      await humanHoverClick(item);
-      await microDelay();
-      await page.keyboard.press("Enter");
-      await humanDelay(400, 900);
-      return true;
-    }
-
-    if (n > 0) {
-      const last = items.nth(n - 1);
-      const text = (await last.innerText().catch(() => "")).trim();
-      if (text) {
-        await log("info", `Enquiry Type listbox — clicking final list row "${text}" (Cold is last).`);
-        await humanHoverClick(last);
-        await page.keyboard.press("Enter");
-        await humanDelay(400, 900);
-        return true;
-      }
-    }
   }
-  return false;
 }
 
-async function selectEnquiryTypeColdViaKeyboard(
+/** Enquiry Type shows Cold in the Follow Up form (GDMS often leaves hidden input empty). */
+async function isEnquiryTypeDisplayCold(modal: Locator): Promise<boolean> {
+  const display = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
+  return /\bcold\b/i.test(display);
+}
+
+/**
+ * Enquiry Type: click dropdown → type "c" → Enter (manual GDMS path).
+ */
+async function selectEnquiryTypeColdViaTypeahead(
   page: Page,
-  display: Locator,
+  modal: Locator,
   log: EnquiryTransferContext["log"],
-): Promise<void> {
-  const input = display.locator('input[id*="InqryType"], input[id*="inqryType"], input[role="combobox"]').first();
-  if (await input.isVisible({ timeout: 1_500 }).catch(() => false)) {
-    await input.click({ force: true });
-  } else {
-    await humanHoverClick(display);
+): Promise<boolean> {
+  await scrollEnquiryInfoBottomIntoView(modal);
+  const trigger = await resolveFollowUpEnquiryTypeTrigger(modal);
+  await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
+
+  const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
+  const kInput = host.locator("span.k-input").first();
+  const kSelect = host.locator("span.k-select").first();
+
+  await log("info", 'Enquiry Type — single click dropdown, type "c", Enter.');
+
+  let clicked = false;
+  for (const target of [kInput, kSelect, host.locator(".k-dropdown-wrap").first(), trigger]) {
+    if (!(await target.isVisible({ timeout: 800 }).catch(() => false))) continue;
+    await target.click({ force: true, timeout: scaleMs(12_000) });
+    clicked = true;
+    break;
   }
-  await microDelay();
-  await page.keyboard.press("End");
-  await microDelay();
+  if (!clicked) await trigger.click({ force: true });
+
+  await humanDelay(500, 900);
+
+  const formRoot = await enquiryModalFormRoot(modal);
+  const inqryInput = formRoot.locator('input[id*="InqryType"], input[id*="inqryType"]').first();
+  if (await inqryInput.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await inqryInput.click({ force: true }).catch(() => {});
+    await inqryInput.focus().catch(() => {});
+  }
+
+  await page.keyboard.press("c");
+  await humanDelay(300, 500);
   await page.keyboard.press("Enter");
-  await humanDelay(400, 900);
-  await log("info", "Enquiry Type — End + Enter (last item = Cold).");
+  await humanDelay(500, 900);
+  await page.keyboard.press("Tab").catch(() => {});
+  await finalizeEnquiryTypeSelection(page);
+  await humanDelay(300, 600);
+
+  if (await isEnquiryTypeDisplayCold(modal)) return true;
+  const deadline = Date.now() + 6_000;
+  while (Date.now() < deadline) {
+    if (await isEnquiryTypeDisplayCold(modal)) return true;
+    await pollDelay(300);
+  }
+  return false;
 }
 
 async function openKendoDropdownNearLabel(
@@ -2258,122 +1907,84 @@ async function readFollowUpEnquiryTypeDisplay(modal: Locator): Promise<string> {
   return readDropdownDisplayNearLabel(modal, ENQUIRY_TYPE_LABEL_RE);
 }
 
-function isPlaceholderDropdownText(text: string): boolean {
-  const t = text.trim();
-  return !t || /^select$/i.test(t) || /^-+$/.test(t);
-}
-
-async function isEnquiryTypeCommittedCold(modal: Locator): Promise<boolean> {
-  const state = await readEnquiryTypeDomState(modal);
-  if (state) return state.isColdCommitted;
-  const page = modal.page();
-  if (await kendoListPopupVisible(page)) return false;
-  const committed = (await readCommittedEnquiryTypeValue(modal)).trim();
-  const visible = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
-  return (
-    /\bcold\b/i.test(committed) &&
-    /\bcold\b/i.test(visible) &&
-    !isPlaceholderDropdownText(committed) &&
-    !isPlaceholderDropdownText(visible)
-  );
-}
-
-async function selectEnquiryTypeCold(
+/** Enquiry Type = Cold: dropdown → type "c" → Enter (once per enquiry). */
+async function selectEnquiryTypeColdOnce(
   modal: Locator,
   log: EnquiryTransferContext["log"],
 ): Promise<void> {
-  await scrollEnquiryInfoBottomIntoView(modal);
   const page = modal.page();
-  const trigger = await resolveFollowUpEnquiryTypeTrigger(modal);
-  const displayHost = trigger.locator("xpath=ancestor::tr[1] | ancestor::dd[1]");
-  const display = displayHost
-    .locator('input[id*="InqryType"], span.k-input, .k-input-value, input[role="combobox"]')
-    .first();
-  const coldRe = /^Cold$/i;
+  await scrollEnquiryInfoBottomIntoView(modal);
 
-  await withModalInputBypass(modal, async () => {
-    await page.keyboard.press("Escape").catch(() => {});
-    await humanDelay(200, 450);
-  });
-
-  if (await isEnquiryTypeCommittedCold(modal)) {
-    const committed = (await readCommittedEnquiryTypeValue(modal)).trim();
-    await log("info", `Enquiry Type already committed Cold ("${committed}") — skipping.`);
+  if (await isEnquiryTypeDisplayCold(modal)) {
+    await log("info", "Enquiry Type already Cold — skipping.");
     return;
   }
 
-  await log("info", "Follow Up — Enquiry Type (InqryType): commit Cold (last list option).");
-  await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
-
   await withModalInputBypass(modal, async () => {
-    if (await commitEnquiryTypeColdInDom(page)) {
-      await humanDelay(500, 1000);
-      if (await isEnquiryTypeCommittedCold(modal)) return;
+    await dismissTransientKendoPopups(page);
+    await humanDelay(200, 400);
+    if (!(await selectEnquiryTypeColdViaTypeahead(page, modal, log))) {
+      throw new Error('Enquiry Type — click dropdown, type "c", Enter did not show Cold.');
     }
-
-    if (!(await kendoListPopupVisible(page))) {
-      await humanHoverClick(trigger);
-      await tryOpenKendoWidgetViaDom(trigger);
-      await humanDelay(500, 1100);
-    }
-
-    if (await clickColdInInqryTypeListbox(page, log)) {
-      await humanDelay(400, 900);
-      await commitEnquiryTypeColdInDom(page).catch(() => false);
-      if (await isEnquiryTypeCommittedCold(modal)) return;
-    }
-
-    if (await kendoListPopupVisible(page)) {
-      await clickKendoListOptionByText(page, coldRe, log);
-      await page.keyboard.press("Enter");
-      await humanDelay(400, 900);
-      return;
-    }
-
-    if (await trySelectKendoDropdownOptionViaWidget(trigger, coldRe)) {
-      await humanDelay(400, 900);
-      return;
-    }
-
-    if (!(await kendoListPopupVisible(page))) {
-      await humanHoverClick(trigger);
-      await humanDelay(400, 900);
-    }
-    await selectEnquiryTypeColdViaKeyboard(page, display, log);
+    await dismissTransientKendoPopups(page);
+    await closeDateTimePickerWithoutClosingModal(modal);
+    await humanDelay(200, 400);
   });
 
-  await withModalInputBypass(modal, async () => {
-    await page.keyboard.press("Tab").catch(() => {});
-    await humanDelay(250, 500);
-  });
-
-  if (!(await isEnquiryTypeCommittedCold(modal))) {
-    const state = await readEnquiryTypeDomState(modal);
-    throw new Error(
-      `Enquiry Type not committed as Cold (display="${state?.displayText || "(empty)"}", hidden value="${state?.hiddenValue || "(empty)"}" — GDMS needs hidden input set, not hover preview).`,
-    );
+  const display = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
+  if (!/\bcold\b/i.test(display)) {
+    throw new Error(`Enquiry Type not Cold after type "c" (display="${display || "(empty)"}").`);
   }
-  const state = await readEnquiryTypeDomState(modal);
-  await log(
-    "info",
-    `Enquiry Type committed Cold (display="${state?.displayText ?? "Cold"}", value="${state?.hiddenValue ?? "?"}").`,
-  );
+  await log("info", `Enquiry Type = Cold (display="${display}").`);
 }
 
-async function ensureEnquiryTypeColdBeforeSave(
-  modal: Locator,
+const FOLLOW_UP_TYPE_LABEL_RE = /^Follow Up Type$/i;
+
+async function isFollowUpTabReadyExceptEnquiryType(modal: Locator): Promise<boolean> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  if (!(await isFollowUpRemarksFilled(formRoot))) return false;
+  const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
+  if (!/^phone$/i.test(followType.trim())) return false;
+  const nextType = await readDropdownDisplayNearLabel(modal, /Next Follow Up Type/i);
+  if (!/^phone$/i.test(nextType.trim())) return false;
+  const verification = await readDropdownDisplayNearLabel(modal, /\*?\s*Verification/i);
+  if (!/^y$/i.test(verification.trim())) return false;
+  return isNextFollowUpTimeFilled(modal);
+}
+
+async function describeFollowUpReadiness(modal: Locator): Promise<string> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const parts: string[] = [];
+  parts.push(`remarks=${(await isFollowUpRemarksFilled(formRoot)) ? "ok" : "missing"}`);
+  parts.push(
+    `followUpType="${(await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim() || "(empty)"}"`,
+  );
+  parts.push(
+    `nextType="${(await readDropdownDisplayNearLabel(modal, /Next Follow Up Type/i)).trim() || "(empty)"}"`,
+  );
+  parts.push(
+    `verification="${(await readDropdownDisplayNearLabel(modal, /\*?\s*Verification/i)).trim() || "(empty)"}"`,
+  );
+  parts.push(`nextTime=${(await isNextFollowUpTimeFilled(modal)) ? "ok" : "missing"}`);
+  parts.push(
+    `enquiryType="${(await readFollowUpEnquiryTypeDisplay(modal)).trim() || "(empty)"}"`,
+  );
+  return parts.join("; ");
+}
+
+async function followUpEnquiryTypeThenSaveOnly(
+  page: Page,
   log: EnquiryTransferContext["log"],
+  ctx: EnquiryTransferContext,
 ): Promise<void> {
-  const maxAttempts = 3;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (await isEnquiryTypeCommittedCold(modal)) return;
-    if (attempt > 1) {
-      await log("info", `Enquiry Type not Cold — retry ${attempt}/${maxAttempts}.`);
-    }
-    await selectEnquiryTypeCold(modal, log);
-    if (await isEnquiryTypeCommittedCold(modal)) return;
-  }
-  throw new Error(`Enquiry Type Cold not committed after ${maxAttempts} attempts.`);
+  const modal = await visibleEnquiryModal(page);
+  const formRoot = await enquiryModalFormRoot(modal);
+  await humanHoverClick(formRoot.getByText(/^Follow Up$/i));
+  await pause("short");
+
+  await log("info", "Follow Up already filled — Enquiry Type (once) then Save only.");
+  await selectEnquiryTypeColdOnce(modal, log);
+  await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
 async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
@@ -2386,57 +1997,37 @@ async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
   }
 }
 
-function parseGdmsDateTime(
-  raw: string,
-): { day: number; month: number; year: number; hour?: number; minute?: number } | null {
-  const m = raw
-    .trim()
-    .match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?)?/i);
-  if (!m) return null;
-  let hour = m[4] !== undefined ? Number(m[4]) : undefined;
-  const minute = m[5] !== undefined ? Number(m[5]) : undefined;
-  const ampm = (m[6] ?? "").toUpperCase();
-  if (hour !== undefined && ampm === "PM" && hour < 12) hour += 12;
-  if (hour !== undefined && ampm === "AM" && hour === 12) hour = 0;
-  return {
-    day: Number(m[1]),
-    month: Number(m[2]),
-    year: Number(m[3]),
-    hour,
-    minute,
-  };
-}
-
-async function readNextFollowUpTimeRaw(modal: Locator): Promise<string> {
+async function isNextFollowUpTimeFilled(modal: Locator): Promise<boolean> {
   const formRoot = await enquiryModalFormRoot(modal);
   const label = formRoot.locator("dt, th, td, label").filter({ hasText: /Next Follow Up Time/i }).first();
-  if (!(await label.isVisible({ timeout: 1_500 }).catch(() => false))) return "";
-  const row = label.locator("xpath=ancestor::tr[1]");
-  const inputs = row.locator("input");
-  const n = await inputs.count().catch(() => 0);
-  for (let i = 0; i < n; i++) {
-    const v = (await inputs.nth(i).inputValue().catch(() => "")).trim();
-    if (v.length >= 8 && /\d/.test(v)) return v;
-  }
-  const text = (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-  const match = text.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}(?:\s+\d{1,2}:\d{2})?/);
-  return match?.[0] ?? "";
-}
+  if (!(await label.isVisible({ timeout: 1_500 }).catch(() => false))) return false;
+  const container = label.locator(
+    "xpath=ancestor::tr[1] | ancestor::dd[1] | ancestor::dl[1] | ancestor::*[contains(@class,'box_form')][1]",
+  );
+  const block = (await container.first().isVisible({ timeout: 500 }).catch(() => false))
+    ? container.first()
+    : label;
 
-/** Wrong/stale dates (e.g. 2025) must be re-set — GDMS SQL error on Save if Next < Follow Up. */
-async function isNextFollowUpTimeValid(modal: Locator): Promise<boolean> {
-  const raw = await readNextFollowUpTimeRaw(modal);
-  if (!raw) return false;
-  const parsed = parseGdmsDateTime(raw);
-  if (!parsed) return false;
-  const target = nextFollowUpDateIst();
-  if (parsed.day !== target.day || parsed.month !== target.month || parsed.year !== target.year) {
-    return false;
+  const combined = (await block.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+  if (/\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/.test(combined) && /\d{1,2}:\d{2}/.test(combined)) {
+    return true;
   }
-  if (parsed.hour !== undefined && parsed.minute !== undefined) {
-    if (!(parsed.hour === 21 && parsed.minute === 30)) return false;
+  if (/\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/.test(combined) && /9:?\s*30\s*PM/i.test(combined)) {
+    return true;
   }
-  return true;
+
+  const displays = block.locator("span.k-input, .k-input-value, input[role='combobox'], input");
+  const dn = await displays.count().catch(() => 0);
+  for (let i = 0; i < dn; i++) {
+    const el = displays.nth(i);
+    const text = (await el.innerText().catch(() => "")).trim();
+    const val = (await el.inputValue().catch(() => "")).trim();
+    const blob = `${text} ${val}`;
+    if (/\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/.test(blob) && (/\d{1,2}:\d{2}/.test(blob) || /9:?\s*30\s*PM/i.test(blob))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function selectRandomReasonForNo(
@@ -2603,6 +2194,13 @@ async function fillBasicInfoAfterPin(
 
 /** Save buttons sit in the Kendo window chrome; the form body is often in an iframe. */
 async function resolveSaveButton(page: Page, preferFinal: boolean): Promise<Locator> {
+  if (preferFinal) {
+    try {
+      return await resolveFollowUpSaveButton(page);
+    } catch {
+      /* fall through to legacy selectors */
+    }
+  }
   const ids = preferFinal ? (["btnFollowUpSave", "btnFinalSave"] as const) : (["btnBasicSave"] as const);
   const scopes: Locator[] = [];
   for (const id of ids) {
@@ -2696,6 +2294,308 @@ async function clickSaveButton(target: Locator, log: EnquiryTransferContext["log
   }
 }
 
+/** Follow Up form complete: remarks, Phone, Y, time, Enquiry Type = Cold (display on form). */
+async function isFollowUpReadyForSave(modal: Locator): Promise<boolean> {
+  if (!(await isFollowUpTabReadyExceptEnquiryType(modal))) return false;
+  return isEnquiryTypeDisplayCold(modal);
+}
+
+/** #btnFollowUpSave lives on k-window chrome (outside enquiry iframe). */
+async function resolveFollowUpSaveButton(page: Page): Promise<Locator> {
+  const tryBtn = async (btn: Locator): Promise<Locator | null> => {
+    if (!(await btn.isVisible({ timeout: 1_500 }).catch(() => false))) return null;
+    const disabled = await btn.getAttribute("aria-disabled").catch(() => null);
+    if (disabled === "true") return null;
+    return btn;
+  };
+
+  for (const ui of listUiContexts(page)) {
+    const scopes = [
+      ui
+        .locator(".k-window")
+        .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
+        .locator("button#btnFollowUpSave, #btnFollowUpSave"),
+      ui.locator(".header_btn.fr button#btnFollowUpSave, .header_btn.fr #btnFollowUpSave"),
+      enquiryWindowWithFollowUpSaveIn(ui).locator("#btnFollowUpSave"),
+      ui.locator("button#btnFollowUpSave.btn_m.btn_save"),
+      ui.locator("#btnFinalSave:visible"),
+    ];
+    for (const scope of scopes) {
+      const n = await scope.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        const picked = await tryBtn(scope.nth(i));
+        if (picked) return picked;
+      }
+    }
+
+    const enquiryWin = ui.locator(".k-window").filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i }).last();
+    if (await enquiryWin.isVisible({ timeout: 800 }).catch(() => false)) {
+      const headerSave = enquiryWin.getByRole("button", { name: /^save$/i }).first();
+      const picked = await tryBtn(headerSave);
+      if (picked) return picked;
+    }
+  }
+
+  const loose = page.locator("#btnFollowUpSave, #btnFinalSave").last();
+  const picked = await tryBtn(loose);
+  if (picked) return picked;
+
+  throw new Error(
+    "#btnFollowUpSave not visible on SALES CUSTOMER ENQUIRY INFO k-window (check top-right Save in popup chrome).",
+  );
+}
+
+async function resolveEnquiryKendoWindow(page: Page): Promise<Locator> {
+  for (const ui of listUiContexts(page)) {
+    const win = enquiryWindowWithFollowUpSaveIn(ui)
+      .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
+      .last();
+    if (await win.isVisible({ timeout: 2_000 }).catch(() => false)) return win;
+    const fallback = enquiryInfoModalIn(ui).filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i }).last();
+    if (await fallback.isVisible({ timeout: 2_000 }).catch(() => false)) return fallback;
+  }
+  return visibleEnquiryModal(page);
+}
+
+async function waitForFollowUpReadyForSave(
+  modal: Locator,
+  log: EnquiryTransferContext["log"],
+  timeoutMs = 12_000,
+): Promise<void> {
+  const page = modal.page();
+  await closeDateTimePickerWithoutClosingModal(modal);
+  await dismissTransientKendoPopups(page);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isFollowUpReadyForSave(modal)) {
+      await log("info", "Follow Up data complete — ready for Save (#btnFollowUpSave).");
+      return;
+    }
+    await dismissTransientKendoPopups(page);
+    await pollDelay(350);
+  }
+  throw new Error(`Follow Up not ready for Save (${await describeFollowUpReadiness(modal)}).`);
+}
+
+async function waitBeforeFollowUpSave(log: EnquiryTransferContext["log"]): Promise<void> {
+  const waitMs = randomBetween(FOLLOW_UP_SAVE_DELAY_MIN_MS, FOLLOW_UP_SAVE_DELAY_MAX_MS);
+  await log(
+    "info",
+    `Follow Up data filled — random wait ${waitMs}ms (max ${FOLLOW_UP_SAVE_DELAY_MAX_MS}ms) before #btnFollowUpSave.`,
+  );
+  await new Promise((r) => setTimeout(r, waitMs));
+}
+
+async function kendoDateTimePickerPopupVisible(page: Page): Promise<boolean> {
+  for (const root of listUiContexts(page)) {
+    if (
+      await root
+        .locator(
+          ".k-datetimepicker-popup:visible, .k-calendar-container:visible, .k-timeselector:visible, .k-datepicker-popup:visible",
+        )
+        .first()
+        .isVisible({ timeout: 400 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Close dropdown/list/calendar popups only — Escape closes the whole enquiry k-window if misused. */
+async function dismissTransientKendoPopups(page: Page): Promise<void> {
+  if (!(await kendoListPopupVisible(page)) && !(await kendoDateTimePickerPopupVisible(page))) {
+    return;
+  }
+  await page.keyboard.press("Escape").catch(() => {});
+  await humanDelay(250, 450);
+}
+
+async function closeDateTimePickerWithoutClosingModal(modal: Locator): Promise<void> {
+  if (!(await kendoDateTimePickerPopupVisible(modal.page()))) return;
+  const formRoot = await enquiryModalFormRoot(modal);
+  const anchor = formRoot.getByText(/^Follow Up History/i).first();
+  if (await anchor.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await anchor.click({ force: true }).catch(() => {});
+  } else {
+    await formRoot.getByText(/^Follow Up$/i).first().click({ force: true }).catch(() => {});
+  }
+  await humanDelay(300, 600);
+}
+
+async function ensureFollowUpTabActive(modal: Locator): Promise<void> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const tab = formRoot.getByText(/^Follow Up$/i).first();
+  if (await tab.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await humanHoverClick(tab);
+    await humanDelay(400, 800);
+  }
+}
+
+async function ensureEnquiryModalOpenForFollowUpSave(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+): Promise<Locator> {
+  if (!(await isAnyEnquiryModalVisible(page))) {
+    throw new Error(
+      "SALES CUSTOMER ENQUIRY INFO modal closed before Follow Up Save — do not press Escape on the enquiry window.",
+    );
+  }
+  const modal = await visibleEnquiryModal(page);
+  await modal.waitFor({ state: "visible", timeout: 20_000 });
+  await ensureFollowUpTabActive(modal);
+  await closeDateTimePickerWithoutClosingModal(modal);
+  await dismissTransientKendoPopups(page);
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      await resolveFollowUpSaveButton(page);
+      return modal;
+    } catch {
+      await ensureFollowUpTabActive(modal);
+      await pollDelay(400);
+    }
+  }
+  await log("warn", "Follow Up Save button not visible yet — re-activating Follow Up tab.");
+  await ensureFollowUpTabActive(modal);
+  return modal;
+}
+
+async function scrollFollowUpSaveIntoView(page: Page): Promise<void> {
+  try {
+    const saveBtn = await resolveFollowUpSaveButton(page);
+    await saveBtn.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
+    const kWindow = await resolveEnquiryKendoWindow(page);
+    await kWindow.evaluate((el) => {
+      (el as HTMLElement).scrollTop = 0;
+    }).catch(() => {});
+  } catch {
+    await page
+      .evaluate(() => {
+        const win = Array.from(document.querySelectorAll(".k-window")).find((w) =>
+          /SALES CUSTOMER ENQUIRY INFO/i.test(w.textContent ?? ""),
+        );
+        const btn = win?.querySelector("#btnFollowUpSave");
+        btn?.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      })
+      .catch(() => {});
+  }
+}
+
+/** Click top-right Save on SALES CUSTOMER ENQUIRY INFO k-window (#btnFollowUpSave, outside iframe). */
+async function clickBtnFollowUpSave(page: Page, log: EnquiryTransferContext["log"]): Promise<void> {
+  await ensureEnquiryModalOpenForFollowUpSave(page, log);
+  await dismissTransientKendoPopups(page);
+
+  const kWindow = await resolveEnquiryKendoWindow(page);
+  const saveBtn = await resolveFollowUpSaveButton(page);
+
+  await kWindow.evaluate((el) => {
+    (el as HTMLElement).scrollTop = 0;
+  }).catch(() => {});
+  await saveBtn.scrollIntoViewIfNeeded({ timeout: 12_000 }).catch(() => {});
+  await humanDelay(300, 600);
+
+  const box = await saveBtn.boundingBox();
+  if (box && box.width > 2 && box.height > 2) {
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await log("info", `Follow Up Save — mouse click #btnFollowUpSave at (${Math.round(x)}, ${Math.round(y)}).`);
+    await page.mouse.move(x, y);
+    await microDelay();
+    await page.mouse.down();
+    await microDelay();
+    await page.mouse.up();
+    await humanDelay(250, 500);
+  } else {
+    const winBox = await kWindow.boundingBox();
+    if (winBox) {
+      const x = winBox.x + winBox.width - 52;
+      const y = winBox.y + 36;
+      await log(
+        "info",
+        `Follow Up Save — mouse click top-right of enquiry k-window (${Math.round(x)}, ${Math.round(y)}).`,
+      );
+      await page.mouse.click(x, y);
+      await humanDelay(250, 500);
+    }
+  }
+
+  await log("info", "Follow Up Save — Playwright + jQuery click on #btnFollowUpSave.");
+  await saveBtn.click({ force: true, timeout: scaleMs(25_000) });
+  await saveBtn
+    .evaluate((el) => {
+      const b = el as HTMLButtonElement;
+      if (b.disabled || b.getAttribute("aria-disabled") === "true") return false;
+      b.focus();
+      const jq = (window as unknown as {
+        jQuery?: (n: Element) => {
+          trigger?: (e: string) => void;
+          click?: () => void;
+          data: (k: string) => { trigger?: (e: string) => void };
+        };
+      }).jQuery;
+      if (jq) {
+        const $b = jq(b);
+        $b.trigger?.("click");
+        $b.click?.();
+        $b.data("kendoButton")?.trigger?.("click");
+      }
+      b.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      b.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      b.click();
+      return true;
+    })
+    .catch(() => false);
+
+  await humanDelay(500, 1_000);
+}
+
+async function saveFollowUpUntilSuccess(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+  ctx: EnquiryTransferContext,
+): Promise<void> {
+  let modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
+  if (!(await isEnquiryTypeDisplayCold(modal))) {
+    throw new Error('Follow Up Save blocked — Enquiry Type must show Cold (type "c" + Enter first).');
+  }
+  try {
+    await waitForFollowUpReadyForSave(modal, log, 10_000);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await log("warn", `${msg} — attempting #btnFollowUpSave anyway (Enquiry Type=Cold).`);
+  }
+  await waitBeforeFollowUpSave(log);
+
+  for (let attempt = 1; attempt <= env.GDMS_SAVE_MAX_ATTEMPTS; attempt++) {
+    await withPageInputBypass(page, async () => {
+      modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
+      await closeDateTimePickerWithoutClosingModal(modal);
+      await dismissTransientKendoPopups(page);
+      await scrollFollowUpSaveIntoView(page);
+      await clickBtnFollowUpSave(page, log);
+    });
+    await humanDelay(
+      env.GDMS_SAVE_RETRY_INTERVAL_MS,
+      env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
+    );
+    if (await isSuccessToastVisible(page)) {
+      await log("info", "Follow Up Save succeeded (#btnFollowUpSave — success toast).");
+      return;
+    }
+    await log("warn", `Follow Up Save attempt ${attempt} — waiting for success toast.`);
+    if (attempt < env.GDMS_SAVE_MAX_ATTEMPTS) {
+      await waitBeforeFollowUpSave(log);
+    }
+  }
+  await ctx.signalManualIntervention(
+    `Follow Up Save (#btnFollowUpSave) failed after ${env.GDMS_SAVE_MAX_ATTEMPTS} attempts.`,
+  );
+}
+
 async function isSuccessToastVisible(page: Page): Promise<boolean> {
   for (const ui of listUiContexts(page)) {
     if (await ui.getByText(SUCCESS_TOAST).first().isVisible({ timeout: 800 }).catch(() => false)) {
@@ -2711,12 +2611,13 @@ async function clickVisibleSaveInModal(
   preferFinal = false,
 ): Promise<void> {
   await visibleEnquiryModal(page).then((m) => m.waitFor({ state: "visible", timeout: 15_000 }));
+  const target = await resolveSaveButton(page, preferFinal);
+  const btnId = (await target.getAttribute("id").catch(() => "")) ?? "";
   if (preferFinal) {
-    await log("info", "Clicking Follow Up Save (#btnFollowUpSave) on enquiry modal.");
+    await log("info", `Clicking Follow Up Save (${btnId || "#btnFollowUpSave"}).`);
   } else {
     await log("info", "Clicking Basic Info Save (#btnBasicSave).");
   }
-  const target = await resolveSaveButton(page, preferFinal);
   await withPageInputBypass(page, async () => {
     await clickSaveButton(target, log);
   });
@@ -2987,7 +2888,7 @@ async function navigateCalendarToDate(
 }
 
 async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> {
-  const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Follow Up Remarks\s*$/i }).first();
+  const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Follow Up Remarks/i }).first();
   if (await label.isVisible({ timeout: 3_000 }).catch(() => false)) {
     const row = label.locator("xpath=ancestor::tr[1]");
     const inRow = row.locator("textarea").first();
@@ -3060,14 +2961,22 @@ async function setNextFollowUpTime(
   await withModalInputBypass(modal, async () => {
     await selectTime930PmInPicker(page, log);
   });
+  await closeDateTimePickerWithoutClosingModal(modal);
   await pause("short");
 }
 
 async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"], ctx: EnquiryTransferContext): Promise<void> {
   const modal = await visibleEnquiryModal(page);
   const formRoot = await enquiryModalFormRoot(modal);
-  await log("info", "Follow Up tab — remarks, Phone, Y, date/time, Enquiry Type Cold, then Final Save.");
   await humanHoverClick(formRoot.getByText(/^Follow Up$/i));
+  await pause("short");
+
+  if (await isFollowUpTabReadyExceptEnquiryType(modal)) {
+    await followUpEnquiryTypeThenSaveOnly(page, log, ctx);
+    return;
+  }
+
+  await log("info", "Follow Up tab — fill missing fields, Enquiry Type once, then Save.");
   await pause("normal");
 
   if (await isFollowUpRemarksFilled(formRoot)) {
@@ -3076,17 +2985,19 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
     const remarks = await resolveFollowUpRemarksInput(formRoot);
     await remarks.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
     await withModalInputBypass(modal, async () => {
-      await remarks.evaluate((el) => {
-        const ta = el as HTMLTextAreaElement;
-        ta.removeAttribute("readonly");
-        ta.removeAttribute("disabled");
-        ta.readOnly = false;
-      }).catch(() => {});
-      await remarks.click({ force: true });
+      await remarks.click();
       await remarks.fill("");
-      await remarks.fill(FOLLOW_UP_REMARKS);
+      await remarks.pressSequentially(FOLLOW_UP_REMARKS, { delay: scaledRandomBetween(80, 140) });
     });
     await log("info", `Follow Up Remarks set to "${FOLLOW_UP_REMARKS}" (Scheme Offered left empty).`);
+    await pause("normal");
+  }
+
+  const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
+  if (/^phone$/i.test(followType.trim())) {
+    await log("info", "Follow Up Type already Phone — skipping.");
+  } else {
+    await selectDropdownNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE, /^Phone$/i);
     await pause("normal");
   }
 
@@ -3101,28 +3012,18 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await selectMandatoryVerificationY(modal);
   await pause("normal");
 
-  if (await isNextFollowUpTimeValid(modal)) {
-    await log("info", "Next Follow Up Time already valid for IST rules — skipping calendar.");
+  if (await isNextFollowUpTimeFilled(modal)) {
+    await log("info", "Next Follow Up Time already set — skipping calendar.");
   } else {
-    const stale = (await readNextFollowUpTimeRaw(modal)).trim();
-    if (stale) {
-      await log(
-        "warn",
-        `Next Follow Up Time invalid or stale ("${stale}") — re-setting (past/wrong year causes GDMS SQL error on Save).`,
-      );
-    }
     await setNextFollowUpTime(page, log);
   }
   await pause("normal");
 
   await scrollEnquiryInfoBottomIntoView(modal);
-  await pause("normal");
-
-  await log("info", "Follow Up — ensure Enquiry Type Cold, then Save (#btnFollowUpSave).");
-  await ensureEnquiryTypeColdBeforeSave(modal, log);
   await pause("short");
 
-  await saveUntilSuccess(page, log, ctx, true);
+  await selectEnquiryTypeColdOnce(modal, log);
+  await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
 async function processOneTransfer(
