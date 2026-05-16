@@ -3,7 +3,7 @@ import type { Page, Locator } from "playwright";
 import type { LogLinePayload } from "@gdms/shared";
 import { applyInputGuardToPage, setAutomationInputBypass } from "./automation-browser-setup.js";
 import { env } from "./config.js";
-import { advanceConsultantRotation, nextSalesConsultant } from "./consultant-rotation.js";
+import { pickNextSalesConsultant } from "./consultant-rotation.js";
 import {
   humanDelay,
   humanHoverClick,
@@ -1673,12 +1673,8 @@ async function commitEnquiryTypeColdViaKendo(page: Page): Promise<boolean> {
           widget.select(coldIdx);
           widget.trigger("change");
           widget.close?.();
-          const committed = String(
-            widget.dataItem()?.Text ??
-              widget.dataItem()?.text ??
-              widget.text?.() ??
-              "",
-          ).trim();
+          const item = widget.dataItem();
+          const committed = String(item?.Text ?? item?.text ?? widget.text?.() ?? "").trim();
           return /^cold$/i.test(committed);
         }
         return false;
@@ -2107,6 +2103,24 @@ async function readFollowUpEnquiryTypeDisplay(modal: Locator): Promise<string> {
   return readDropdownDisplayNearLabel(modal, ENQUIRY_TYPE_LABEL_RE);
 }
 
+function isPlaceholderDropdownText(text: string): boolean {
+  const t = text.trim();
+  return !t || /^select$/i.test(t) || /^-+$/.test(t);
+}
+
+async function isEnquiryTypeCommittedCold(modal: Locator): Promise<boolean> {
+  const page = modal.page();
+  if (await kendoListPopupVisible(page)) return false;
+  const committed = (await readCommittedEnquiryTypeValue(modal)).trim();
+  const visible = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
+  return (
+    /\bcold\b/i.test(committed) &&
+    /\bcold\b/i.test(visible) &&
+    !isPlaceholderDropdownText(committed) &&
+    !isPlaceholderDropdownText(visible)
+  );
+}
+
 async function selectEnquiryTypeCold(
   modal: Locator,
   log: EnquiryTransferContext["log"],
@@ -2125,9 +2139,9 @@ async function selectEnquiryTypeCold(
     await humanDelay(200, 450);
   });
 
-  let current = await readCommittedEnquiryTypeValue(modal);
-  if (/\bcold\b/i.test(current)) {
-    await log("info", `Enquiry Type already committed Cold ("${current.trim()}") — skipping.`);
+  if (await isEnquiryTypeCommittedCold(modal)) {
+    const committed = (await readCommittedEnquiryTypeValue(modal)).trim();
+    await log("info", `Enquiry Type already committed Cold ("${committed}") — skipping.`);
     return;
   }
 
@@ -2171,17 +2185,35 @@ async function selectEnquiryTypeCold(
   });
 
   await withModalInputBypass(modal, async () => {
-    await page.keyboard.press("Escape").catch(() => {});
-    await humanDelay(200, 450);
+    await page.keyboard.press("Tab").catch(() => {});
+    await humanDelay(250, 500);
   });
 
-  const after = await readCommittedEnquiryTypeValue(modal);
-  if (!/\bcold\b/i.test(after)) {
+  if (!(await isEnquiryTypeCommittedCold(modal))) {
+    const after = (await readCommittedEnquiryTypeValue(modal)).trim();
+    const visible = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
     throw new Error(
-      `Enquiry Type not committed as Cold (hover preview may show Cold while list is open; got: "${after || "(empty)"}").`,
+      `Enquiry Type not committed as Cold (committed="${after || "(empty)"}", visible="${visible || "(empty)"}").`,
     );
   }
-  await log("info", `Enquiry Type committed Cold ("${after.trim()}").`);
+  const after = (await readCommittedEnquiryTypeValue(modal)).trim();
+  await log("info", `Enquiry Type committed Cold ("${after}").`);
+}
+
+async function ensureEnquiryTypeColdBeforeSave(
+  modal: Locator,
+  log: EnquiryTransferContext["log"],
+): Promise<void> {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (await isEnquiryTypeCommittedCold(modal)) return;
+    if (attempt > 1) {
+      await log("info", `Enquiry Type not Cold — retry ${attempt}/${maxAttempts}.`);
+    }
+    await selectEnquiryTypeCold(modal, log);
+    if (await isEnquiryTypeCommittedCold(modal)) return;
+  }
+  throw new Error(`Enquiry Type Cold not committed after ${maxAttempts} attempts.`);
 }
 
 async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
@@ -2296,6 +2328,30 @@ async function isBasicInfoTransferFieldsFilled(modal: Locator): Promise<boolean>
   return true;
 }
 
+async function applyRotatingSalesConsultant(
+  modal: Locator,
+  log: EnquiryTransferContext["log"],
+  redis: Redis,
+  dealerId: string,
+): Promise<void> {
+  const consultant = await pickNextSalesConsultant(redis, dealerId);
+  await ensureBasicInfoTabActive(modal);
+  await scrollKendoFieldIntoView(modal, /Sales Consultant/i);
+  const before = (await readDropdownDisplayNearLabel(modal, /Sales Consultant/i)).trim();
+  await log(
+    "info",
+    `Sales Consultant round-robin → ${consultant}${before ? ` (was "${before}")` : ""}.`,
+  );
+  await selectSalesConsultant(modal, consultant);
+  const after = (await readDropdownDisplayNearLabel(modal, /Sales Consultant/i)).trim();
+  if (!new RegExp(escapeRegExp(consultant.split(/\s+/).slice(0, 2).join(" ")), "i").test(after)) {
+    throw new Error(
+      `Sales Consultant verify failed after select (expected "${consultant}", display: "${after || "(empty)"}").`,
+    );
+  }
+  await log("info", `Sales Consultant set: ${consultant}.`);
+}
+
 async function fillBasicInfoAfterPin(
   page: Page,
   log: EnquiryTransferContext["log"],
@@ -2305,11 +2361,11 @@ async function fillBasicInfoAfterPin(
   const modal = await resolveMainEnquiryBasicInfoModal(page, log);
 
   if (await isBasicInfoTransferFieldsFilled(modal)) {
-    await ensureBasicInfoTabActive(modal);
     await log(
       "info",
-      "Basic Info already complete on this enquiry (PIN, TD Offer No, Reason for No) — skip re-fill; Save then Follow Up tab only.",
+      "Basic Info already has PIN / TD Offer / Reason — still updating Sales Consultant (round-robin).",
     );
+    await applyRotatingSalesConsultant(modal, log, redis, dealerId);
     return modal;
   }
 
@@ -2341,35 +2397,33 @@ async function fillBasicInfoAfterPin(
     }
   }
 
-  const consultant = await nextSalesConsultant(redis, dealerId);
-  await scrollKendoFieldIntoView(modal, /Sales Consultant/i);
-  await log("info", `Sales Consultant — select ${consultant} (rotation ref 12).`);
-  await selectSalesConsultant(modal, consultant);
-  await log("info", `Sales consultant selected: ${consultant}.`);
+  await applyRotatingSalesConsultant(modal, log, redis, dealerId);
   await log("info", "Basic Info fields done — clicking Save (#btnBasicSave) next.");
   return modal;
 }
 
 /** Save buttons sit in the Kendo window chrome; the form body is often in an iframe. */
 async function resolveSaveButton(page: Page, preferFinal: boolean): Promise<Locator> {
-  const id = preferFinal ? "btnFinalSave" : "btnBasicSave";
+  const ids = preferFinal ? (["btnFollowUpSave", "btnFinalSave"] as const) : (["btnBasicSave"] as const);
   const scopes: Locator[] = [];
-  for (const ui of listUiContexts(page)) {
-    scopes.push(ui.locator(`.k-window:visible #${id}`).first());
-    scopes.push(ui.locator(`#${id}`).first());
-    scopes.push(
-      ui
-        .locator(".k-window, [role='dialog']")
-        .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
-        .locator(`#${id}`)
-        .first(),
-    );
-  }
-  try {
-    const modal = await visibleEnquiryModal(page);
-    scopes.push(modal.locator(`#${id}`).first());
-  } catch {
-    /* modal not resolved yet */
+  for (const id of ids) {
+    for (const ui of listUiContexts(page)) {
+      scopes.push(ui.locator(`.k-window:visible #${id}`).first());
+      scopes.push(ui.locator(`#${id}`).first());
+      scopes.push(
+        ui
+          .locator(".k-window, [role='dialog']")
+          .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
+          .locator(`#${id}`)
+          .first(),
+      );
+    }
+    try {
+      const modal = await visibleEnquiryModal(page);
+      scopes.push(modal.locator(`#${id}`).first());
+    } catch {
+      /* modal not resolved yet */
+    }
   }
 
   for (const candidate of scopes) {
@@ -2380,9 +2434,24 @@ async function resolveSaveButton(page: Page, preferFinal: boolean): Promise<Loca
 
   if (preferFinal) {
     for (const ui of listUiContexts(page)) {
+      const inModal = ui
+        .locator(".k-window, [role='dialog']")
+        .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
+        .locator("button.btn_save, button#btnFollowUpSave, button#btnFinalSave")
+        .first();
+      if (await inModal.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        return inModal;
+      }
       const saves = ui.getByRole("button", { name: /final\s+save/i });
       if (await saves.first().isVisible({ timeout: 1_000 }).catch(() => false)) {
         return saves.first();
+      }
+      const headerSave = ui
+        .locator(".k-window:visible .header_btn button, .k-window:visible button.btn_save")
+        .filter({ hasText: /^save$/i })
+        .first();
+      if (await headerSave.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        return headerSave;
       }
     }
   } else {
@@ -2401,7 +2470,7 @@ async function resolveSaveButton(page: Page, preferFinal: boolean): Promise<Loca
 
   throw new Error(
     preferFinal
-      ? "Final Save button not found on enquiry modal"
+      ? "Follow Up Save (#btnFollowUpSave / #btnFinalSave) not found on enquiry modal"
       : "Basic Info Save (#btnBasicSave) not found on enquiry modal",
   );
 }
@@ -2444,7 +2513,7 @@ async function clickVisibleSaveInModal(
 ): Promise<void> {
   await visibleEnquiryModal(page).then((m) => m.waitFor({ state: "visible", timeout: 15_000 }));
   if (preferFinal) {
-    await log("info", "Clicking Follow Up Final Save on enquiry modal.");
+    await log("info", "Clicking Follow Up Save (#btnFollowUpSave) on enquiry modal.");
   } else {
     await log("info", "Clicking Basic Info Save (#btnBasicSave).");
   }
@@ -2835,10 +2904,12 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await pause("normal");
 
   await scrollEnquiryInfoBottomIntoView(modal);
-  await selectEnquiryTypeCold(modal, log);
   await pause("normal");
 
-  await log("info", "Saving Follow Up tab (Final Save) after Enquiry Type Cold.");
+  await log("info", "Follow Up — ensure Enquiry Type Cold, then Save (#btnFollowUpSave).");
+  await ensureEnquiryTypeColdBeforeSave(modal, log);
+  await pause("short");
+
   await saveUntilSuccess(page, log, ctx, true);
 }
 
@@ -2859,7 +2930,7 @@ async function processOneTransfer(
   if (basicAlreadySaved) {
     await log(
       "info",
-      "This enquiry already has Basic Info (PIN, TD Offer, Reason) — Save only, then Follow Up tab (same as manual re-open).",
+      "Basic Info pre-filled — round-robin Sales Consultant update, Save, then Follow Up.",
     );
   } else {
     await log(
@@ -2879,7 +2950,6 @@ async function processOneTransfer(
   await saveUntilSuccess(detailPage, log, ctx);
 
   await completeFollowUpTab(detailPage, log, ctx);
-  await advanceConsultantRotation(redis, dealerId);
   await log("info", "Enquiry transfer cycle completed.");
 }
 
