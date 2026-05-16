@@ -2987,7 +2987,7 @@ async function navigateCalendarToDate(
 }
 
 async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> {
-  const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Follow Up Remarks/i }).first();
+  const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Follow Up Remarks\s*$/i }).first();
   if (await label.isVisible({ timeout: 3_000 }).catch(() => false)) {
     const row = label.locator("xpath=ancestor::tr[1]");
     const inRow = row.locator("textarea").first();
@@ -3076,9 +3076,15 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
     const remarks = await resolveFollowUpRemarksInput(formRoot);
     await remarks.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
     await withModalInputBypass(modal, async () => {
-      await remarks.click();
+      await remarks.evaluate((el) => {
+        const ta = el as HTMLTextAreaElement;
+        ta.removeAttribute("readonly");
+        ta.removeAttribute("disabled");
+        ta.readOnly = false;
+      }).catch(() => {});
+      await remarks.click({ force: true });
       await remarks.fill("");
-      await remarks.pressSequentially(FOLLOW_UP_REMARKS, { delay: scaledRandomBetween(80, 140) });
+      await remarks.fill(FOLLOW_UP_REMARKS);
     });
     await log("info", `Follow Up Remarks set to "${FOLLOW_UP_REMARKS}" (Scheme Offered left empty).`);
     await pause("normal");

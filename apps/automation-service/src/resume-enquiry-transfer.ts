@@ -12,7 +12,9 @@ import { runEnquiryTransfer } from "./enquiry-transfer.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import {
   attachInputGuardListeners,
+  engageAutomationInputLock,
   installAutomationBrowserScripts,
+  releaseUserInputForManualControl,
 } from "./automation-browser-setup.js";
 import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
 import {
@@ -147,6 +149,7 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     await log("info", "GDMS home screen detected from profile — skipping login and OTP.");
 
     const signalManualIntervention = async (message: string): Promise<never> => {
+      await releaseUserInputForManualControl(page);
       await prisma.workflowRun.update({
         where: { id: runId },
         data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
@@ -155,9 +158,12 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
         workflowRunId: runId,
         message,
       });
+      await log("info", "GDMS keyboard unlocked for manual edits (Remarks, dates, etc.).");
       await log("error", message);
       throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
     };
+
+    await engageAutomationInputLock(page);
 
     if (await isOnCustomerEnquiryList(page)) {
       await log("info", "Already on Sales Customer Enquiry list — continuing search (no re-navigation).");
@@ -212,6 +218,7 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
       "info",
       "Browser session kept open — use Resume saved session or Retry transfer when ready.",
     );
+    await releaseUserInputForManualControl(page);
   } finally {
     redisClient.disconnect();
   }

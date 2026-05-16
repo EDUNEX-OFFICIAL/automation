@@ -16,7 +16,11 @@ import {
   waitForGdmsDashboardReady,
 } from "./gdms-session-watch.js";
 
-import { applyInputGuardToPage } from "./automation-browser-setup.js";
+import {
+  applyInputGuardToPage,
+  engageAutomationInputLock,
+  releaseUserInputForManualControl,
+} from "./automation-browser-setup.js";
 import { env } from "./config.js";
 
 const prisma = createPrisma();
@@ -81,6 +85,7 @@ export async function retryEnquiryTransfer(runId: string): Promise<void> {
     await log("info", "Restarting enquiry transfer on the active browser session.");
 
     const signalManualIntervention = async (message: string): Promise<never> => {
+      await releaseUserInputForManualControl(page);
       await prisma.workflowRun.update({
         where: { id: runId },
         data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
@@ -89,9 +94,12 @@ export async function retryEnquiryTransfer(runId: string): Promise<void> {
         workflowRunId: runId,
         message,
       });
+      await log("info", "GDMS keyboard unlocked for manual edits (Remarks, dates, etc.).");
       await log("error", message);
       throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
     };
+
+    await engageAutomationInputLock(page);
 
     if (!(await isOnCustomerEnquiryList(page))) {
       await waitForGdmsDashboardReady(page, log, 180_000, {
@@ -146,6 +154,7 @@ export async function retryEnquiryTransfer(runId: string): Promise<void> {
       "info",
       "Browser session kept open — use Resume saved session or Retry transfer when ready.",
     );
+    await releaseUserInputForManualControl(page);
   } finally {
     redisClient.disconnect();
   }
