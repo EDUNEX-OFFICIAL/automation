@@ -1579,103 +1579,258 @@ async function clickKendoListOptionByText(
   throw new Error(`Kendo list option not found or not clickable: ${String(optRe)}`);
 }
 
-/** GDMS field id contains InqryType (e.g. eqfuAftInqryType / eqfuAftInqryType_listbox). */
-const ENQUIRY_TYPE_FIELD_ID_RE = /InqryType|inqryType/i;
+/** GDMS ids: eqfuAflrEnqryType, eqfuAftInqryType (+ _listbox). Uses extdropdownlist, not only kendoDropDownList. */
+const ENQUIRY_TYPE_FIELD_ID_RE = /EnqryType|InqryType|inqryType/i;
 
-async function readCommittedEnquiryTypeValue(modal: Locator): Promise<string> {
+type EnquiryTypeDomState = {
+  displayText: string;
+  hiddenValue: string;
+  isColdCommitted: boolean;
+  listOpen: boolean;
+};
+
+async function readEnquiryTypeDomState(modal: Locator): Promise<EnquiryTypeDomState | null> {
   const page = modal.page();
   for (const ui of listUiContexts(page)) {
-    const committed = await ui
+    const state = await ui
       .evaluate((idReSource) => {
         const idRe = new RegExp(idReSource, "i");
-        const inputs = Array.from(
-          document.querySelectorAll<HTMLInputElement>("input[id], select[id]"),
-        ).filter((el) => idRe.test(el.id));
-        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } })
-          .jQuery;
-        type Ddl = {
+        const isListboxId = (id: string) => /listbox$/i.test(id);
+        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[id]")).filter(
+          (el) => idRe.test(el.id) && !isListboxId(el.id),
+        );
+        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } }).jQuery;
+
+        type Widget = {
           select: (i?: number) => number;
           dataItem: () => Record<string, unknown> | null | undefined;
           text: () => string;
-          value: () => string;
+          value: (v?: string) => string;
+          trigger: (e: string) => void;
+          close?: () => void;
+          dataSource?: { data: () => Record<string, unknown>[] };
         };
-        const itemText = (item: Record<string, unknown> | null | undefined): string =>
+
+        const itemLabel = (item: Record<string, unknown> | null | undefined): string =>
           item
-            ? String(item.Text ?? item.text ?? item.Name ?? item.name ?? item.Value ?? item.value ?? "").trim()
+            ? String(item.Text ?? item.text ?? item.Name ?? item.name ?? item.VALUE ?? item.value ?? "").trim()
             : "";
 
-        for (const input of inputs) {
-          const host = input.closest(".k-dropdown") ?? input.parentElement;
-          if (!host) continue;
-          const expanded = host.getAttribute("aria-expanded") === "true";
-          const widget =
-            (jq?.(input)?.data("kendoDropDownList") as Ddl | undefined) ??
-            (jq?.(host)?.data("kendoDropDownList") as Ddl | undefined);
-          if (widget) {
-            if (expanded) return "";
-            const idx = widget.select();
-            const fromItem = itemText(widget.dataItem());
-            if (idx >= 0 && fromItem) return fromItem;
-            const t = (widget.text?.() ?? "").trim();
-            if (t) return t;
-            continue;
+        const resolveWidget = (input: HTMLInputElement, host: Element | null): Widget | null => {
+          if (!jq) return null;
+          const keys = [
+            "extdropdownlist",
+            "extDropDownList",
+            "ExtDropDownList",
+            "kendoDropDownList",
+          ];
+          const nodes = [input, host].filter(Boolean) as Element[];
+          for (const node of nodes) {
+            for (const key of keys) {
+              const w = jq(node)?.data(key) as Widget | undefined;
+              if (w && typeof w.select === "function") return w;
+            }
+            const $node = jq(node) as { data: (key?: string) => unknown };
+            const bag = $node.data() as Record<string, unknown> | undefined;
+            if (bag) {
+              for (const val of Object.values(bag)) {
+                if (val && typeof val === "object" && typeof (val as Widget).select === "function") {
+                  return val as Widget;
+                }
+              }
+            }
           }
-          if (expanded) continue;
-          const span = host.querySelector("span.k-input");
-          const t = (span?.textContent ?? "").replace(/\s+/g, " ").trim();
-          if (t) return t;
+          return null;
+        };
+
+        for (const input of inputs) {
+          const host =
+            (input.closest(".k-dropdown, .k-widget") as Element | null) ?? input.parentElement;
+          const listOpen = host?.getAttribute("aria-expanded") === "true";
+          const spanText = (host?.querySelector("span.k-input")?.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim();
+          let hiddenValue = (input.value ?? "").trim();
+          const widget = resolveWidget(input, host);
+          let displayText = spanText;
+
+          if (widget && !listOpen) {
+            widget.select();
+            const fromItem = itemLabel(widget.dataItem());
+            const wText = (widget.text?.() ?? "").trim();
+            if (fromItem) displayText = fromItem;
+            else if (wText) displayText = wText;
+            if (!hiddenValue) {
+              const item = widget.dataItem();
+              const code = item
+                ? String(item.Value ?? item.value ?? item.CODE ?? item.code ?? "").trim()
+                : "";
+              if (code) hiddenValue = code;
+            }
+          }
+
+          const displayCold = /^cold$/i.test(displayText);
+          const hiddenOk = hiddenValue.length > 0;
+          const isColdCommitted = displayCold && hiddenOk && !listOpen;
+
+          return { displayText, hiddenValue, isColdCommitted, listOpen };
         }
-        return "";
+        return null;
       }, ENQUIRY_TYPE_FIELD_ID_RE.source)
-      .catch(() => "");
-    if (committed) return committed;
+      .catch(() => null);
+    if (state) return state;
   }
+  return null;
+}
+
+async function readCommittedEnquiryTypeValue(modal: Locator): Promise<string> {
+  const state = await readEnquiryTypeDomState(modal);
+  if (state?.displayText) return state.displayText;
   return readFollowUpEnquiryTypeDisplay(modal);
 }
 
-async function commitEnquiryTypeColdViaKendo(page: Page): Promise<boolean> {
+/** Commit Cold on GDMS extdropdownlist / Kendo — sync hidden input value (not hover preview only). */
+async function commitEnquiryTypeColdInDom(page: Page): Promise<boolean> {
   for (const ui of listUiContexts(page)) {
     const ok = await ui
       .evaluate((idReSource) => {
         const idRe = new RegExp(idReSource, "i");
-        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } })
-          .jQuery;
-        type Ddl = {
-          dataSource: { data: () => Record<string, unknown>[] };
+        const isListboxId = (id: string) => /listbox$/i.test(id);
+        const jq = (window as unknown as { jQuery?: (n: Element) => { data: (k: string) => unknown } }).jQuery;
+
+        type Widget = {
+          dataSource?: { data: () => Record<string, unknown>[] };
           select: (i: number) => void;
           trigger: (e: string) => void;
           close?: () => void;
           dataItem: () => Record<string, unknown> | null | undefined;
           text: () => string;
+          value: (v?: string) => string;
+          open?: () => void;
         };
-        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[id]")).filter((el) =>
-          idRe.test(el.id),
-        );
-        for (const input of inputs) {
-          const widget = jq?.(input)?.data("kendoDropDownList") as Ddl | undefined;
-          if (!widget) continue;
-          const data = widget.dataSource.data() ?? [];
-          let coldIdx = -1;
-          for (let i = 0; i < data.length; i++) {
-            const t = String(data[i]!.Text ?? data[i]!.text ?? "").trim();
-            if (/^cold$/i.test(t)) coldIdx = i;
-          }
-          if (coldIdx < 0) {
-            for (let i = data.length - 1; i >= 0; i--) {
-              const t = String(data[i]!.Text ?? data[i]!.text ?? "").trim();
-              if (t) {
-                coldIdx = i;
-                break;
-              }
+
+        const itemLabel = (item: Record<string, unknown>): string =>
+          String(item.Text ?? item.text ?? item.Name ?? item.name ?? "").trim();
+
+        const itemCode = (item: Record<string, unknown>): string =>
+          String(item.Value ?? item.value ?? item.CODE ?? item.code ?? item.ID ?? item.id ?? "").trim();
+
+        const resolveWidget = (input: HTMLInputElement, host: Element | null): Widget | null => {
+          if (!jq) return null;
+          const keys = ["extdropdownlist", "extDropDownList", "ExtDropDownList", "kendoDropDownList"];
+          for (const node of [input, host].filter(Boolean) as Element[]) {
+            for (const key of keys) {
+              const w = jq(node)?.data(key) as Widget | undefined;
+              if (w?.select) return w;
             }
           }
-          if (coldIdx < 0) continue;
-          widget.select(coldIdx);
-          widget.trigger("change");
-          widget.close?.();
-          const item = widget.dataItem();
-          const committed = String(item?.Text ?? item?.text ?? widget.text?.() ?? "").trim();
-          return /^cold$/i.test(committed);
+          return null;
+        };
+
+        const syncHidden = (input: HTMLInputElement, item: Record<string, unknown> | null | undefined): void => {
+          const code = item ? itemCode(item) : "";
+          if (code) input.value = code;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          (jq?.(input) as { trigger?: (e: string) => void } | undefined)?.trigger?.("change");
+        };
+
+        const verifyCold = (input: HTMLInputElement, host: Element | null, widget: Widget | null): boolean => {
+          if (host?.getAttribute("aria-expanded") === "true") return false;
+          const spanText = (host?.querySelector("span.k-input")?.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim();
+          const hidden = (input.value ?? "").trim();
+          const wText = widget ? (widget.text?.() ?? "").trim() : "";
+          const displayCold = /^cold$/i.test(spanText) || /^cold$/i.test(wText);
+          return displayCold && hidden.length > 0;
+        };
+
+        const clickColdLi = (listbox: Element): boolean => {
+          const items = Array.from(listbox.querySelectorAll("li, .k-list-item, [role='option']"));
+          let coldLi: HTMLElement | null = null;
+          for (const el of items) {
+            const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+            if (/^cold$/i.test(t)) coldLi = el as HTMLElement;
+          }
+          if (!coldLi && items.length > 0) {
+            coldLi = items[items.length - 1] as HTMLElement;
+          }
+          if (!coldLi) return false;
+          const scroller =
+            listbox.querySelector<HTMLElement>(".k-list-scroller, .k-list-content") ??
+            (listbox as HTMLElement);
+          scroller.scrollTop = scroller.scrollHeight;
+          coldLi.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          coldLi.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+          coldLi.click();
+          const dv =
+            coldLi.getAttribute("data-value") ??
+            (coldLi as HTMLElement & { dataset: { value?: string } }).dataset.value ??
+            "";
+          return !!dv || /^cold$/i.test((coldLi.textContent ?? "").trim());
+        };
+
+        const inputs = Array.from(document.querySelectorAll<HTMLInputElement>("input[id]")).filter(
+          (el) => idRe.test(el.id) && !isListboxId(el.id),
+        );
+
+        for (const input of inputs) {
+          const host =
+            (input.closest(".k-dropdown, .k-widget") as Element | null) ?? input.parentElement;
+          const widget = resolveWidget(input, host);
+          const data = widget?.dataSource?.data?.() ?? [];
+
+          if (widget && data.length > 0) {
+            let coldIdx = -1;
+            for (let i = 0; i < data.length; i++) {
+              if (/^cold$/i.test(itemLabel(data[i]!))) coldIdx = i;
+            }
+            if (coldIdx < 0) coldIdx = data.length - 1;
+            widget.select(coldIdx);
+            widget.trigger("change");
+            syncHidden(input, data[coldIdx]!);
+            widget.close?.();
+            if (verifyCold(input, host, widget)) return true;
+          }
+
+          widget?.open?.();
+          const arrow = host?.querySelector<HTMLElement>("span.k-select, .k-select");
+          arrow?.click();
+          const listbox =
+            (host?.getAttribute("aria-owns")
+              ? document.getElementById(host.getAttribute("aria-owns")!)
+              : null) ??
+            document.querySelector('[id*="EnqryType"][id*="listbox"]') ??
+            document.querySelector('[id*="InqryType"][id*="listbox"]');
+          if (listbox && clickColdLi(listbox)) {
+            const items = Array.from(listbox.querySelectorAll("li, .k-list-item"));
+            const coldItem = items.find((el) => /^cold$/i.test((el.textContent ?? "").trim()));
+            const li = coldItem ?? items[items.length - 1];
+            const code =
+              li?.getAttribute("data-value") ??
+              (li as HTMLElement & { dataset: { value?: string } })?.dataset?.value ??
+              "";
+            if (code) input.value = code;
+            else if (li && /^cold$/i.test((li.textContent ?? "").trim())) input.value = "Cold";
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+            (jq?.(input) as { trigger?: (e: string) => void } | undefined)?.trigger?.("change");
+            widget?.trigger?.("change");
+            widget?.close?.();
+            const w = resolveWidget(input, host);
+            if (verifyCold(input, host, w)) return true;
+          }
+
+          if (widget) {
+            const idx = data.length - 1;
+            if (idx >= 0) {
+              widget.select(idx);
+              widget.trigger("change");
+              syncHidden(input, data[idx]!);
+              widget.close?.();
+              if (verifyCold(input, host, widget)) return true;
+            }
+          }
         }
         return false;
       }, ENQUIRY_TYPE_FIELD_ID_RE.source)
@@ -2109,6 +2264,8 @@ function isPlaceholderDropdownText(text: string): boolean {
 }
 
 async function isEnquiryTypeCommittedCold(modal: Locator): Promise<boolean> {
+  const state = await readEnquiryTypeDomState(modal);
+  if (state) return state.isColdCommitted;
   const page = modal.page();
   if (await kendoListPopupVisible(page)) return false;
   const committed = (await readCommittedEnquiryTypeValue(modal)).trim();
@@ -2149,9 +2306,9 @@ async function selectEnquiryTypeCold(
   await trigger.scrollIntoViewIfNeeded({ timeout: 10_000 }).catch(() => {});
 
   await withModalInputBypass(modal, async () => {
-    if (await commitEnquiryTypeColdViaKendo(page)) {
-      await humanDelay(400, 900);
-      return;
+    if (await commitEnquiryTypeColdInDom(page)) {
+      await humanDelay(500, 1000);
+      if (await isEnquiryTypeCommittedCold(modal)) return;
     }
 
     if (!(await kendoListPopupVisible(page))) {
@@ -2162,7 +2319,8 @@ async function selectEnquiryTypeCold(
 
     if (await clickColdInInqryTypeListbox(page, log)) {
       await humanDelay(400, 900);
-      return;
+      await commitEnquiryTypeColdInDom(page).catch(() => false);
+      if (await isEnquiryTypeCommittedCold(modal)) return;
     }
 
     if (await kendoListPopupVisible(page)) {
@@ -2190,14 +2348,16 @@ async function selectEnquiryTypeCold(
   });
 
   if (!(await isEnquiryTypeCommittedCold(modal))) {
-    const after = (await readCommittedEnquiryTypeValue(modal)).trim();
-    const visible = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
+    const state = await readEnquiryTypeDomState(modal);
     throw new Error(
-      `Enquiry Type not committed as Cold (committed="${after || "(empty)"}", visible="${visible || "(empty)"}").`,
+      `Enquiry Type not committed as Cold (display="${state?.displayText || "(empty)"}", hidden value="${state?.hiddenValue || "(empty)"}" — GDMS needs hidden input set, not hover preview).`,
     );
   }
-  const after = (await readCommittedEnquiryTypeValue(modal)).trim();
-  await log("info", `Enquiry Type committed Cold ("${after}").`);
+  const state = await readEnquiryTypeDomState(modal);
+  await log(
+    "info",
+    `Enquiry Type committed Cold (display="${state?.displayText ?? "Cold"}", value="${state?.hiddenValue ?? "?"}").`,
+  );
 }
 
 async function ensureEnquiryTypeColdBeforeSave(
