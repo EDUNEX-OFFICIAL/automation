@@ -40,6 +40,16 @@ const ENQUIRY_TYPE_LABEL_RE = /^\*?\s*Enquiry\s*Type\s*$/i;
 const FOLLOW_UP_SAVE_DELAY_MAX_MS = 4_000;
 const FOLLOW_UP_SAVE_DELAY_MIN_MS = 1_200;
 const SUCCESS_TOAST = /successfully reflected/i;
+
+function isPlaywrightDetachError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /frame was detached/i.test(msg) ||
+    /target page, context or browser has been closed/i.test(msg) ||
+    /execution context was destroyed/i.test(msg)
+  );
+}
+
 /** After final save, wait for CRM to dismiss enquiry UI; if stuck, re-Save up to this many times (each followed by 10–20s wait). */
 const MAX_ENQUIRY_SURFACE_STUCK_RESAVES = 3;
 /** Wait window for popup/modal to close on its own (ms). */
@@ -2524,7 +2534,15 @@ async function clickBtnFollowUpSave(page: Page, log: EnquiryTransferContext["log
   }
 
   await log("info", "Follow Up Save — Playwright + jQuery click on #btnFollowUpSave.");
-  await saveBtn.click({ force: true, timeout: scaleMs(25_000) });
+  try {
+    await saveBtn.click({ force: true, timeout: scaleMs(8_000) });
+  } catch (err) {
+    if (!isPlaywrightDetachError(err)) throw err;
+    await log(
+      "warn",
+      "Follow Up Save — Playwright click stopped: frame detached (CRM often closes the modal right after save).",
+    );
+  }
   await saveBtn
     .evaluate((el) => {
       const b = el as HTMLButtonElement;
@@ -2571,22 +2589,30 @@ async function saveFollowUpUntilSuccess(
   await waitBeforeFollowUpSave(log);
 
   for (let attempt = 1; attempt <= env.GDMS_SAVE_MAX_ATTEMPTS; attempt++) {
-    await withPageInputBypass(page, async () => {
-      modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
-      await closeDateTimePickerWithoutClosingModal(modal);
-      await dismissTransientKendoPopups(page);
-      await scrollFollowUpSaveIntoView(page);
-      await clickBtnFollowUpSave(page, log);
-    });
+    try {
+      await withPageInputBypass(page, async () => {
+        modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
+        await closeDateTimePickerWithoutClosingModal(modal);
+        await dismissTransientKendoPopups(page);
+        await scrollFollowUpSaveIntoView(page);
+        await clickBtnFollowUpSave(page, log);
+      });
+    } catch (err) {
+      if (!isPlaywrightDetachError(err)) throw err;
+      await log(
+        "warn",
+        `Follow Up Save attempt ${attempt} — frame detached during click; checking if CRM already saved and closed the modal.`,
+      );
+    }
     await humanDelay(
       env.GDMS_SAVE_RETRY_INTERVAL_MS,
       env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
     );
-    if (await isSuccessToastVisible(page)) {
-      await log("info", "Follow Up Save succeeded (#btnFollowUpSave — success toast).");
+    if (await confirmFollowUpSaveSucceeded(page, log)) {
+      await log("info", "Follow Up Save succeeded (#btnFollowUpSave).");
       return;
     }
-    await log("warn", `Follow Up Save attempt ${attempt} — waiting for success toast.`);
+    await log("warn", `Follow Up Save attempt ${attempt} — no success toast or list dismiss yet.`);
     if (attempt < env.GDMS_SAVE_MAX_ATTEMPTS) {
       await waitBeforeFollowUpSave(log);
     }
@@ -2603,6 +2629,30 @@ async function isSuccessToastVisible(page: Page): Promise<boolean> {
     }
   }
   return page.getByText(SUCCESS_TOAST).first().isVisible({ timeout: 800 }).catch(() => false);
+}
+
+/** CRM may close the enquiry k-window before the success toast is readable on the list. */
+async function confirmFollowUpSaveSucceeded(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+  waitMs = 14_000,
+): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    if (await isSuccessToastVisible(page)) return true;
+    if (
+      !(await isAnyEnquiryModalVisible(page)) &&
+      (await isOnCustomerEnquiryList(page))
+    ) {
+      await log(
+        "info",
+        "Follow Up Save — modal closed and Customer Enquiry list visible (treating save as successful).",
+      );
+      return true;
+    }
+    await pollDelay(350);
+  }
+  return false;
 }
 
 async function clickVisibleSaveInModal(
@@ -3120,9 +3170,9 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
       } finally {
         if (transferCompleted) {
           await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, listPage, listPage);
+          await humanDelay(800, 1800);
+          await ensureListPageForPolling(listPage, log);
         }
-        await humanDelay(800, 1800);
-        await ensureListPageForPolling(listPage, log);
       }
       continue;
     }
@@ -3140,9 +3190,9 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
     } finally {
       if (transferCompleted) {
         await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, detailPage, listPage);
+        await humanDelay(800, 1800);
+        await ensureListPageForPolling(listPage, log);
       }
-      await humanDelay(800, 1800);
-      await ensureListPageForPolling(listPage, log);
     }
   }
 }

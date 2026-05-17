@@ -1,4 +1,9 @@
-import type { AutomationOperation, AutomationSource, SubSourcesSelection } from "@gdms/shared";
+import {
+  automationRunParamsSchema,
+  type AutomationOperation,
+  type AutomationSource,
+  type SubSourcesSelection,
+} from "@gdms/shared";
 import { apiFetch } from "@/lib/api";
 import {
   useAutomationSessionStore,
@@ -15,6 +20,72 @@ const IN_FLIGHT_STATUSES = new Set([
 ]);
 
 type WorkflowRunSummary = { id: string; status: string; dealerId?: string };
+
+export type WorkflowRunDetail = {
+  id: string;
+  dealerId: string;
+  status: string;
+  runParams: unknown;
+  errorMessage?: string | null;
+};
+
+const RESUMABLE_STATUSES = new Set([
+  "FAILED",
+  "PAUSED_USER",
+  "RUNNING",
+  "PAUSED_OTP",
+  "STOPPED",
+]);
+
+function normalizeRunIdInput(raw: string): string {
+  return raw.trim();
+}
+
+/** Load dealer + automation options from an existing workflow run (session / run ID). */
+export async function loadSessionByRunId(
+  token: string,
+  runIdInput: string,
+): Promise<SavedAutomationSession> {
+  const runId = normalizeRunIdInput(runIdInput);
+  if (!runId) {
+    throw new Error("Enter a session ID (workflow run ID from Live session or your saved run).");
+  }
+
+  const run = await apiFetch<WorkflowRunDetail>(`/v1/workflow-runs/${encodeURIComponent(runId)}`, {
+    token,
+  });
+
+  const params = automationRunParamsSchema.safeParse(run.runParams);
+  if (!params.success) {
+    throw new Error(
+      "This session does not have valid enquiry transfer settings. Start a new run from the form instead.",
+    );
+  }
+
+  return {
+    runId: run.id,
+    dealerId: run.dealerId,
+    operation: params.data.operation,
+    sources: params.data.sources,
+    subSources: params.data.subSources,
+    savedAt: Date.now(),
+    otpVerifiedAt: run.status !== "PENDING" ? Date.now() : undefined,
+    gdmsReadyAt: ["RUNNING", "PAUSED_USER", "COMPLETED", "FAILED", "STOPPED"].includes(run.status)
+      ? Date.now()
+      : undefined,
+  };
+}
+
+/** Persist session locally, resume browser profile / transfer on automation-service. */
+export async function startAutomationFromSessionId(
+  token: string,
+  runIdInput: string,
+): Promise<SavedAutomationSession> {
+  const saved = await loadSessionByRunId(token, runIdInput);
+  useAutomationSessionStore.getState().save(saved);
+  await resumeSavedAutomationSession(token, saved);
+  return saved;
+}
 
 /** Link Live session to the current automation run (works for super admin without dealerId on JWT). */
 export async function findInFlightWorkflowRunId(token: string): Promise<string | null> {
@@ -78,15 +149,18 @@ export async function resumeSavedAutomationSession(
     apiFetch<{ active: boolean }>(`/v1/workflow-runs/${saved.runId}/session-active`, { token }),
   ]);
 
-  const resumableStatus =
-    run.status === "FAILED" ||
-    run.status === "PAUSED_USER" ||
-    run.status === "RUNNING" ||
-    run.status === "PAUSED_OTP" ||
-    run.status === "STOPPED";
+  if (saved.operation !== "enquiry_transfer") {
+    throw new Error("Only enquiry transfer sessions can be started from a session ID.");
+  }
 
-  if (!resumableStatus || saved.operation !== "enquiry_transfer") {
-    return;
+  if (run.status === "COMPLETED") {
+    throw new Error("This session has already completed. Use START to begin a new run.");
+  }
+
+  if (!RESUMABLE_STATUSES.has(run.status)) {
+    throw new Error(
+      `This session cannot be resumed (status: ${run.status}). Try START for a new run.`,
+    );
   }
 
   if (session.active) {

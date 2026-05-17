@@ -102,6 +102,18 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
   if (lower.includes("cleared automatically") || lower.includes("automation service stopped")) {
     return "A previous run was left open after the app restarted. Press START again — it should work now.";
   }
+  if (lower.includes("enter a session id")) {
+    return "Enter the session ID (workflow run ID) shown on Live session, then press Start.";
+  }
+  if (lower.includes("session has already completed")) {
+    return "That session has already finished. Use START to create a new automation run.";
+  }
+  if (lower.includes("session cannot be resumed")) {
+    return message;
+  }
+  if (lower.includes("not found") && lower.includes("workflow")) {
+    return "No session found with that ID. Check the run ID on Live session and try again.";
+  }
 
   return null;
 }

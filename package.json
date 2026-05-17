@@ -6,6 +6,7 @@
     "build": "node scripts/prisma-generate.mjs && turbo run build",
     "docker:up": "docker compose up -d postgres redis",
     "dev": "turbo run dev --parallel",
+    "dev:local-agent": "turbo run dev --parallel --filter=@gdms/worker --filter=@gdms/automation-service",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
     "db:generate": "node scripts/prisma-generate.mjs",
