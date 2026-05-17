@@ -98,7 +98,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
   /** Latest in-flight or paused run (for Live session when admin has no dealerId on JWT). */
   app.get("/v1/workflow-runs/in-flight", { preHandler: authPreHandler }, async (req) => {
     const queryDealer = (req.query as { dealerId?: string }).dealerId;
-    const userDealer = req.user!.dealerId ?? undefined;
+    const userDealer = req.user!.dealerId;
 
     let dealerIds: string[];
     if (queryDealer) {
