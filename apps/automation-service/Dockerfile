@@ -13,4 +13,4 @@ RUN pnpm --filter @gdms/automation-service build
 ENV NODE_ENV=production
 WORKDIR /repo/apps/automation-service
 EXPOSE 4101
-CMD ["node", "dist/server.js"]
+CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x800x24", "node", "dist/server.js"]

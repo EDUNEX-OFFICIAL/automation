@@ -42,6 +42,7 @@ export default function LiveSessionPage() {
   const [logoutMessage, setLogoutMessage] = useState<string | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [requeuing, setRequeuing] = useState(false);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -137,6 +138,31 @@ export default function LiveSessionPage() {
       token,
       body: JSON.stringify({ action }),
     });
+  }
+
+  async function requeueRun(): Promise<void> {
+    if (!token || !runId || requeuing) return;
+    setRequeuing(true);
+    try {
+      await apiFetch(`/v1/workflow-runs/${runId}/requeue`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      });
+      useLiveStore.getState().pushLog({
+        level: "info",
+        message: "Run queued again.",
+        ts: new Date().toISOString(),
+      });
+    } catch (e) {
+      useLiveStore.getState().pushLog({
+        level: "warn",
+        message: toUserMessage(e, "generic"),
+        ts: new Date().toISOString(),
+      });
+    } finally {
+      setRequeuing(false);
+    }
   }
 
   async function retryTransfer(): Promise<void> {
@@ -235,6 +261,7 @@ export default function LiveSessionPage() {
     runRow?.status === "RUNNING" &&
     (lastStep?.includes("Wait for GDMS dashboard") ||
       logs.some((l) => /still waiting for dashboard/i.test(l.message)));
+  const canRequeue = !!runId && runRow?.status === "PENDING" && !requeuing;
   const canRetryTransfer =
     !!runId &&
     !retrying &&
@@ -330,6 +357,11 @@ export default function LiveSessionPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {canRequeue ? (
+            <Button size="sm" onClick={() => void requeueRun()}>
+              {requeuing ? "Queuing…" : "Retry queue"}
+            </Button>
+          ) : null}
           {canRetryTransfer ? (
             <Button size="sm" onClick={() => void retryTransfer()}>
               {retrying ? "Working…" : retryButtonLabel}

@@ -8,9 +8,11 @@ import { setOtpForRun, setControl, isWatchdogActive } from "../redis.js";
 import {
   automationRunParamsSchema,
   isEnabledAutomationOperation,
+  SocketEvents,
   startAutomationSchema,
   type AutomationRunParams,
 } from "@gdms/shared";
+import { publishWorkflowEvent } from "../socket.js";
 import { decryptSecret, type EncryptedPayload } from "@gdms/auth";
 import { defaultLoginWorkflow, enquiryTransferWorkflow, type WorkflowDefinition } from "@gdms/workflow-engine";
 import { env } from "../config.js";
@@ -342,6 +344,69 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       if (!res.ok) {
         return reply.code(502).send({ error: "Automation service could not start retry" });
       }
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/v1/workflow-runs/:id/requeue",
+    { preHandler: authPreHandler },
+    async (req, reply) => {
+      const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
+      if (!run) return reply.code(404).send({ error: "Not found" });
+      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+      if (run.status !== "PENDING" && run.status !== "FAILED" && run.status !== "STOPPED") {
+        return reply.code(409).send({
+          error: "Requeue is only available for queued or failed runs.",
+        });
+      }
+
+      const params = automationRunParamsSchema.safeParse(run.runParams);
+      if (!params.success || !isEnabledAutomationOperation(params.data.operation)) {
+        return reply.code(409).send({ error: "This run has no valid automation options to requeue." });
+      }
+
+      const existing = await workflowQueue.getJob(run.id);
+      if (existing) {
+        const state = await existing.getState();
+        if (state === "active") {
+          return reply.code(409).send({ error: "This run is already being processed." });
+        }
+        await existing.remove();
+      }
+
+      const jobData: WorkflowJobData = {
+        runId: run.id,
+        dealerId: run.dealerId,
+        operation: params.data.operation,
+        sources: params.data.sources,
+        subSources: params.data.subSources,
+      };
+
+      await prisma.workflowRun.update({
+        where: { id: run.id },
+        data: {
+          status: "PENDING",
+          errorMessage: null,
+          endedAt: null,
+          startedAt: new Date(),
+        },
+      });
+      await workflowQueue.add("execute", jobData, { jobId: run.id });
+
+      await publishWorkflowEvent({
+        type: SocketEvents.LOG_LINE,
+        dealerId: run.dealerId,
+        payload: {
+          workflowRunId: run.id,
+          level: "info",
+          message: "Run queued again.",
+          ts: new Date().toISOString(),
+        },
+      });
+
       return { ok: true };
     },
   );

@@ -84,6 +84,12 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
   if (lower.includes("automation http")) {
     return "The automation service could not be reached. Make sure it is running and try again.";
   }
+  if (
+    lower.includes("worker did not pick up") ||
+    lower.includes("@gdms/worker")
+  ) {
+    return "Automation is queued but the worker is not running on the server. Start @gdms/worker (and automation-service) with the same Redis as the API, then press Retry queue.";
+  }
   if (lower.includes("run is not in live preview")) {
     return "This run is not showing a live preview. Start GDMS login from the Dashboard first.";
   }

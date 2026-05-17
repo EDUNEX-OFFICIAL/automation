@@ -29,16 +29,35 @@ async function fetchAutomationSessionActive(runId: string): Promise<boolean> {
   }
 }
 
-async function isBullJobStillQueued(runId: string): Promise<boolean> {
+async function getBullJobState(runId: string): Promise<string | null> {
   try {
     const job = await workflowQueue.getJob(runId);
-    if (!job) return false;
-    const state = await job.getState();
-    return state === "active" || state === "waiting" || state === "delayed";
+    if (!job) return null;
+    return job.getState();
   } catch {
-    return false;
+    return null;
   }
 }
+
+async function isBullJobStillQueued(runId: string): Promise<boolean> {
+  const state = await getBullJobState(runId);
+  return state === "active" || state === "waiting" || state === "delayed";
+}
+
+async function workflowWorkerCount(): Promise<number> {
+  try {
+    const workers = await workflowQueue.getWorkers();
+    return workers.length;
+  } catch {
+    return 0;
+  }
+}
+
+const PENDING_GRACE_MS = 60_000;
+const PENDING_STUCK_MS = 5 * 60_000;
+
+const WORKER_NOT_PROCESSING_MESSAGE =
+  "Automation worker did not pick up this run. On the server, ensure @gdms/worker and @gdms/automation-service are running and share the same REDIS_URL as the API.";
 
 /** True when automation is actually executing or holding a live browser for this run. */
 export async function isWorkflowRunLive(
@@ -50,8 +69,18 @@ export async function isWorkflowRunLive(
   const ageMs = Date.now() - run.startedAt.getTime();
 
   if (run.status === "PENDING") {
-    if (ageMs < 3 * 60_000) return true;
-    return isBullJobStillQueued(run.id);
+    if (ageMs < PENDING_GRACE_MS) return true;
+    const jobState = await getBullJobState(run.id);
+    if (jobState === "active") return true;
+    const workers = await workflowWorkerCount();
+    if (
+      (jobState === "waiting" || jobState === "delayed") &&
+      workers > 0 &&
+      ageMs < PENDING_STUCK_MS
+    ) {
+      return true;
+    }
+    return false;
   }
 
   if (run.status === "PAUSED_OTP") {
@@ -89,12 +118,29 @@ export async function reconcileStaleWorkflowRunsForDealer(dealerId: string): Pro
 
   for (const run of inFlight) {
     if (await isWorkflowRunLive(run)) continue;
+
+    let errorMessage = STALE_END_MESSAGE;
+    let status: WorkflowRunStatus = "STOPPED";
+
+    if (run.status === "PENDING") {
+      const jobState = await getBullJobState(run.id);
+      if (jobState === "failed") {
+        const job = await workflowQueue.getJob(run.id);
+        const reason = job?.failedReason ? String(job.failedReason) : "";
+        status = "FAILED";
+        errorMessage = reason || WORKER_NOT_PROCESSING_MESSAGE;
+      } else if ((await workflowWorkerCount()) === 0) {
+        status = "FAILED";
+        errorMessage = WORKER_NOT_PROCESSING_MESSAGE;
+      }
+    }
+
     await prisma.workflowRun.update({
       where: { id: run.id },
       data: {
-        status: "STOPPED",
+        status,
         endedAt: new Date(),
-        errorMessage: STALE_END_MESSAGE,
+        errorMessage,
       },
     });
     clearedRunIds.push(run.id);
