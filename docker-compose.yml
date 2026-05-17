@@ -40,6 +40,7 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/gdms?schema=public
       REDIS_URL: redis://redis:6379
@@ -59,6 +60,7 @@ services:
     build:
       context: .
       dockerfile: apps/automation-service/Dockerfile
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/gdms?schema=public
       REDIS_URL: redis://redis:6379
@@ -66,7 +68,8 @@ services:
       SESSIONS_DIR: /data/sessions
       AUTOMATION_INTERNAL_SECRET: dev-internal-secret-change-me
       PORT: 4101
-      PLAYWRIGHT_HEADED: "false"
+      PLAYWRIGHT_HEADED: "true"
+      DISPLAY: ":99"
     volumes:
       - sessions:/data/sessions
     depends_on:
