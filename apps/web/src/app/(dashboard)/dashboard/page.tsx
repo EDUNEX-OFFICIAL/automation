@@ -18,12 +18,16 @@ import {
 } from "@gdms/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiHttpError, apiFetch } from "@/lib/api";
 import type { GdmsAccountSummary } from "@/lib/gdms-account";
 import {
+  loadSessionByRunId,
   persistAutomationRun,
   resumeSavedAutomationSession,
+  startAutomationFromSessionId,
+  type WorkflowRunDetail,
 } from "@/lib/saved-automation-session";
 import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
@@ -48,6 +52,11 @@ export default function DashboardPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [sessionIdInput, setSessionIdInput] = useState("");
+  const [sessionPreview, setSessionPreview] = useState<SavedAutomationSession | null>(null);
+  const [sessionRunStatus, setSessionRunStatus] = useState<string | null>(null);
+  const [loadingSession, setLoadingSession] = useState(false);
+  const [startingFromSession, setStartingFromSession] = useState(false);
   const [operation, setOperation] = useState<AutomationOperation | "">("enquiry_transfer");
   const [sources, setSources] = useState<AutomationSource[]>([]);
   const [subSources, setSubSources] = useState<SubSourcesSelection>({});
@@ -71,6 +80,13 @@ export default function DashboardPage() {
       }
     });
   }, [token, user?.dealerId]);
+
+  useEffect(() => {
+    const saved = dealerId ? useAutomationSessionStore.getState().get(dealerId) : undefined;
+    if (saved?.runId && !sessionIdInput) {
+      setSessionIdInput(saved.runId);
+    }
+  }, [dealerId, sessionIdInput]);
 
   useEffect(() => {
     if (!token || !dealerId) return;
@@ -132,6 +148,63 @@ export default function DashboardPage() {
   function canResumeSaved(saved: SavedAutomationSession | undefined): boolean {
     if (!saved) return false;
     return Boolean(saved.otpVerifiedAt || saved.gdmsReadyAt);
+  }
+
+  function applySessionToForm(saved: SavedAutomationSession): void {
+    setDealerId(saved.dealerId);
+    setOperation(saved.operation);
+    setSources(saved.sources);
+    setSubSources(saved.subSources ?? {});
+    setSessionPreview(saved);
+  }
+
+  async function loadSessionPreview(): Promise<void> {
+    if (!token || loadingSession) return;
+    const id = sessionIdInput.trim();
+    if (!id) {
+      setMsg("Enter a session ID first (the Run ID from Live session).");
+      setSessionPreview(null);
+      setSessionRunStatus(null);
+      return;
+    }
+    setMsg(null);
+    setLoadingSession(true);
+    try {
+      const saved = await loadSessionByRunId(token, id);
+      const run = await apiFetch<WorkflowRunDetail>(
+        `/v1/workflow-runs/${encodeURIComponent(saved.runId)}`,
+        { token },
+      );
+      applySessionToForm(saved);
+      setSessionRunStatus(run.status);
+    } catch (e) {
+      setSessionPreview(null);
+      setSessionRunStatus(null);
+      setMsg(toUserMessage(e, "generic"));
+    } finally {
+      setLoadingSession(false);
+    }
+  }
+
+  async function startFromSessionId(): Promise<void> {
+    if (!token || startingFromSession) return;
+    const id = sessionIdInput.trim();
+    if (!id) {
+      setMsg("Enter a session ID first (the Run ID from Live session).");
+      return;
+    }
+    setMsg(null);
+    resetLogs();
+    setStartingFromSession(true);
+    try {
+      const saved = await startAutomationFromSessionId(token, id);
+      applySessionToForm(saved);
+      router.push("/live-session");
+    } catch (e) {
+      setMsg(toUserMessage(e, "generic"));
+    } finally {
+      setStartingFromSession(false);
+    }
   }
 
   async function resumeSession(): Promise<void> {
@@ -215,8 +288,8 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">Dashboard</h1>
         <p className="text-sm text-zinc-600">
-          Choose an operation and sources, then press START. Your last run id is saved locally so
-          you can resume without OTP when GDMS is still logged in.
+          Choose an operation and sources, then press START — or enter a saved session ID to resume
+          an existing browser profile without OTP.
         </p>
       </div>
 
@@ -284,6 +357,78 @@ export default function DashboardPage() {
           <Link href="/settings" className="text-sm text-blue-600 underline">
             Settings
           </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Start from saved session</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <p className="text-sm text-zinc-600">
+            Paste the <strong>Session ID</strong> (workflow run ID from Live session, e.g.{" "}
+            <span className="font-mono text-xs">cmp9xc2gx0001vxqo9811deen</span>). Automation uses
+            that run&apos;s saved sources and sub-sources, then opens the browser profile without a
+            new OTP when possible.
+          </p>
+          <div className="space-y-1.5">
+            <Label htmlFor="session-id">Session ID</Label>
+            <Input
+              id="session-id"
+              placeholder="cmp9xc2gx0001vxqo9811deen"
+              value={sessionIdInput}
+              onChange={(e) => {
+                setSessionIdInput(e.target.value);
+                setSessionPreview(null);
+                setSessionRunStatus(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void loadSessionPreview();
+              }}
+              className="font-mono text-xs"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loadingSession || !sessionIdInput.trim()}
+              onClick={() => void loadSessionPreview()}
+            >
+              {loadingSession ? "Loading…" : "Verify session"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={startingFromSession || !sessionIdInput.trim()}
+              onClick={() => void startFromSessionId()}
+            >
+              {startingFromSession ? "Starting…" : "Start from session ID"}
+            </Button>
+          </div>
+          {sessionPreview ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
+              <p className="font-medium">Session loaded</p>
+              <p className="mt-1 font-mono text-xs">{sessionPreview.runId}</p>
+              {sessionRunStatus ? (
+                <p className="mt-1 text-xs">Status: {sessionRunStatus}</p>
+              ) : null}
+              <p className="mt-1 text-xs">
+                {OPERATION_LABELS[sessionPreview.operation]} ·{" "}
+                {sessionPreview.sources.join(", ")}
+              </p>
+              {SUB_SOURCE_PARENTS.filter((p) => sessionPreview.subSources?.[p]?.length).map(
+                (parent) => (
+                  <p key={parent} className="text-xs">
+                    {parent}: {(sessionPreview.subSources?.[parent] ?? []).join(", ")}
+                  </p>
+                ),
+              )}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

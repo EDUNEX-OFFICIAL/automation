@@ -5,6 +5,7 @@ dist
 .turbo
 .env
 .env.local
+scripts/kvm.host
 *.log
 playwright-report
 test-results
