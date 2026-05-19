@@ -1,0 +1,123 @@
+# Production overlay (Caddy on vahan360_vahan360-network).
+services:
+  postgres:
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: gdms
+    networks:
+      - vahan360-edge
+    ports: !reset []
+
+  redis:
+    container_name: gdms-automation-redis
+    networks:
+      vahan360-edge:
+        aliases:
+          - gdms-automation-redis
+    ports: !reset []
+
+  api:
+    container_name: automation-api
+    networks:
+      - vahan360-edge
+    ports: !reset []
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gdms?schema=public
+      REDIS_URL: redis://gdms-automation-redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
+      CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      AUTOMATION_INTERNAL_SECRET: ${AUTOMATION_INTERNAL_SECRET}
+      AUTOMATION_SERVICE_URL: http://automation:4101
+      AI_INTERNAL_SECRET: ${AI_INTERNAL_SECRET}
+      AI_SERVICE_URL: http://ai:4200
+      VOICE_BRIDGE_ENABLED: "false"
+      AUTH_DEV_OPEN_LOGIN: "true"
+      NODE_ENV: production
+      PORT: 4000
+      GDMS_REMOTE_VIEW: ${GDMS_REMOTE_VIEW:-true}
+      GDMS_VNC_PASSWORD: ${GDMS_VNC_PASSWORD:-gdms}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    container_name: automation-worker
+    networks:
+      - vahan360-edge
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gdms?schema=public
+      REDIS_URL: redis://gdms-automation-redis:6379
+      CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY}
+      AUTOMATION_SERVICE_URL: http://automation:4101
+      AUTOMATION_INTERNAL_SECRET: ${AUTOMATION_INTERNAL_SECRET}
+      AI_SERVICE_URL: http://ai:4200
+      AI_INTERNAL_SECRET: ${AI_INTERNAL_SECRET}
+      GDMS_BASE_URL: https://ndms.hmil.net/cmm/cmmi/selectLoginMain.dms
+      GDMS_HOME_URL: https://ndms.hmil.net/cmm/cmmd/selectHome.dms
+      NODE_ENV: production
+
+  automation:
+    container_name: automation-playwright
+    expose:
+      - "6080"
+      - "6081"
+    networks:
+      - vahan360-edge
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gdms?schema=public
+      REDIS_URL: redis://gdms-automation-redis:6379
+      AUTOMATION_INTERNAL_SECRET: ${AUTOMATION_INTERNAL_SECRET}
+      GDMS_BASE_URL: https://ndms.hmil.net/cmm/cmmi/selectLoginMain.dms
+      GDMS_HOME_URL: https://ndms.hmil.net/cmm/cmmd/selectHome.dms
+      SESSIONS_DIR: /data/sessions
+      PORT: 4101
+      PLAYWRIGHT_HEADED: ${PLAYWRIGHT_HEADED:-true}
+      DISPLAY: ${DISPLAY:-:99}
+      GDMS_PREVIEW_STREAM: ${GDMS_PREVIEW_STREAM:-true}
+      GDMS_REMOTE_VIEW: ${GDMS_REMOTE_VIEW:-true}
+      GDMS_VNC_PASSWORD: ${GDMS_VNC_PASSWORD:-gdms}
+      GDMS_VNC_WIDTH: ${GDMS_VNC_WIDTH:-1920}
+      GDMS_VNC_HEIGHT: ${GDMS_VNC_HEIGHT:-1080}
+      # Production: cookies from Settings → login token (Redis). Do not use host .env bootstrap (often malformed in Docker).
+      GDMS_BOOTSTRAP_COOKIES: ""
+      GDMS_FORCE_COOKIE_BOOTSTRAP: "false"
+      NODE_ENV: production
+
+  ai:
+    container_name: automation-ai
+    networks:
+      - vahan360-edge
+    ports: !reset []
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gdms?schema=public
+      REDIS_URL: redis://gdms-automation-redis:6379
+      AI_INTERNAL_SECRET: ${AI_INTERNAL_SECRET}
+      OLLAMA_HOST: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2
+      NODE_ENV: production
+      PORT: 4200
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    container_name: automation-web
+    networks:
+      - vahan360-edge
+    ports: !reset []
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /api-upstream
+        NEXT_PUBLIC_SOCKET_URL: https://bot.edunexservices.in
+        API_UPSTREAM_URL: http://api:4000
+    environment:
+      API_UPSTREAM_URL: http://api:4000
+      NODE_ENV: production
+
+networks:
+  vahan360-edge:
+    external: true
+    name: vahan360_vahan360-network

@@ -6,17 +6,32 @@ import { canStartWorkflow, canAccessDealer } from "@gdms/auth";
 import { workflowQueue, type WorkflowJobData } from "../queue.js";
 import { setOtpForRun, setControl, isWatchdogActive } from "../redis.js";
 import {
+  GDMS_VNC_WORKSPACE,
+  SocketEvents,
   automationRunParamsSchema,
   isEnabledAutomationOperation,
-  SocketEvents,
   startAutomationSchema,
   type AutomationRunParams,
 } from "@gdms/shared";
 import { publishWorkflowEvent } from "../socket.js";
 import { decryptSecret, type EncryptedPayload } from "@gdms/auth";
-import { defaultLoginWorkflow, enquiryTransferWorkflow, type WorkflowDefinition } from "@gdms/workflow-engine";
+import {
+  defaultLoginWorkflow,
+  enquiryTransferWorkflow,
+  followUpSkipWorkflow,
+  type WorkflowDefinition,
+} from "@gdms/workflow-engine";
 import { env } from "../config.js";
-import { reconcileStaleWorkflowRunsForDealer } from "../lib/stale-workflow-run.js";
+import { healWorkflowRunOnRead, reconcileStaleWorkflowRunsForDealer } from "../lib/stale-workflow-run.js";
+import { getRunLogBuffer } from "../run-log-buffer.js";
+import {
+  ensureWorkflowJobQueued,
+  isBullJobStillQueued,
+  isBullJobStuckWaiting,
+  purgeBullJobArtifacts,
+  removeStaleBullJob,
+} from "../lib/ensure-workflow-job.js";
+import { triggerEnquiryResumeAfterControl } from "../lib/trigger-enquiry-resume.js";
 
 const automationBase = () => env.AUTOMATION_SERVICE_URL ?? "http://localhost:4101";
 const automationSecret = () => env.AUTOMATION_INTERNAL_SECRET ?? "dev-internal-secret-change-me";
@@ -44,10 +59,21 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     const inFlight = await prisma.workflowRun.findFirst({
       where: {
         dealerId: body.dealerId,
-        status: { in: ["PENDING", "RUNNING", "PAUSED_OTP"] },
+        status: { in: ["PENDING", "RUNNING", "PAUSED_OTP", "PAUSED_USER"] },
+        runParams: { path: ["operation"], equals: body.operation },
       },
     });
     if (inFlight) {
+      if (
+        inFlight.status === "PENDING" &&
+        (!(await isBullJobStillQueued(inFlight.id)) || (await isBullJobStuckWaiting(inFlight.id)))
+      ) {
+        const requeue = await ensureWorkflowJobQueued(inFlight, { force: true });
+        if (requeue.ok) {
+          req.log.info({ runId: inFlight.id, jobState: requeue.jobState }, "workflow job requeued for orphan PENDING");
+          return inFlight;
+        }
+      }
       return reply.code(409).send({
         error:
           "An automation is already running for this dealer. Open Live session and press Stop, or wait for it to finish.",
@@ -59,7 +85,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
 
     const runParams: AutomationRunParams = {
       operation: body.operation,
-      sources: body.sources,
+      sources: body.operation === "follow_up_skip" ? [] : body.sources,
       ...(body.subSources ? { subSources: body.subSources } : {}),
     };
 
@@ -76,11 +102,26 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       runId: run.id,
       dealerId: body.dealerId,
       operation: body.operation,
-      sources: body.sources,
+      sources: body.operation === "follow_up_skip" ? [] : body.sources,
       subSources: body.subSources,
     };
 
-    await workflowQueue.add("execute", jobData, { jobId: run.id });
+    try {
+      await removeStaleBullJob(run.id);
+      await workflowQueue.add("execute", jobData, { jobId: run.id });
+      const job = await workflowQueue.getJob(run.id);
+      if (!job) {
+        await prisma.workflowRun.delete({ where: { id: run.id } });
+        req.log.error({ runId: run.id }, "workflow job missing after enqueue");
+        return reply.code(503).send({ error: "Could not queue this run. Try again." });
+      }
+      const jobState = await job.getState();
+      req.log.info({ runId: run.id, jobState }, "workflow job enqueued");
+    } catch (err) {
+      await prisma.workflowRun.delete({ where: { id: run.id } }).catch(() => undefined);
+      req.log.error({ runId: run.id, err }, "workflow enqueue failed");
+      return reply.code(503).send({ error: "Could not queue this run. Try again." });
+    }
     return run;
   });
 
@@ -157,8 +198,32 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
       return reply.code(403).send({ error: "Forbidden" });
     }
-    return run;
+    const healed = await healWorkflowRunOnRead(run);
+    const liveLogs = await getRunLogBuffer(healed.id);
+    return { ...healed, liveLogs };
   });
+
+  app.post<{ Params: { id: string } }>(
+    "/v1/workflow-runs/:id/requeue",
+    { preHandler: authPreHandler },
+    async (req, reply) => {
+      const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
+      if (!run) return reply.code(404).send({ error: "Not found" });
+      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+      if (run.status !== "PENDING") {
+        return reply.code(409).send({ error: "Only queued runs can be re-queued." });
+      }
+      const result = await ensureWorkflowJobQueued(run, { force: true });
+      if (!result.ok) {
+        req.log.error({ runId: run.id, reason: result.reason }, "workflow requeue failed");
+        return reply.code(503).send({ error: "Could not queue this run. Try again." });
+      }
+      req.log.info({ runId: run.id, jobState: result.jobState }, "workflow job requeued");
+      return { ok: true, jobState: result.jobState };
+    },
+  );
 
   app.post<{ Params: { id: string } }>("/v1/workflow-runs/:id/otp", { preHandler: authPreHandler }, async (req, reply) => {
     const otp = z.object({ otp: z.string().min(4) }).parse(req.body).otp;
@@ -168,6 +233,10 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       return reply.code(403).send({ error: "Forbidden" });
     }
     await setOtpForRun(run.id, otp, run.dealerId);
+    void fetch(`${automationBase()}/internal/notify-otp/${run.id}`, {
+      method: "POST",
+      headers: { "x-internal-secret": automationSecret() },
+    }).catch(() => undefined);
     return { ok: true };
   });
 
@@ -183,10 +252,103 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
         return reply.code(403).send({ error: "Forbidden" });
       }
-      if (body.action === "pause") await setControl(run.id, "pause", "1");
-      if (body.action === "resume") await setControl(run.id, "pause", "0");
-      if (body.action === "stop") await setControl(run.id, "stop", "1");
-      return { ok: true };
+      const pauseMsg =
+        "Paused from Live session — press Resume when you are ready to continue.";
+      const stopMsg = "Stopped from Live session.";
+
+      if (body.action === "pause") {
+        if (run.status === "PENDING") {
+          return reply.code(409).send({
+            error: "This run is still queued. Use Stop to cancel it, or wait a few seconds.",
+          });
+        }
+        if (run.status !== "RUNNING" && run.status !== "PAUSED_OTP") {
+          return reply.code(409).send({ error: "This run cannot be paused right now." });
+        }
+        await setControl(run.id, "pause", "1");
+        await prisma.workflowRun.update({
+          where: { id: run.id },
+          data: {
+            status: "PAUSED_USER",
+            errorMessage: pauseMsg,
+            endedAt: new Date(),
+          },
+        });
+        await publishWorkflowEvent({
+          type: SocketEvents.WORKFLOW_PAUSED_USER,
+          dealerId: run.dealerId,
+          payload: { workflowRunId: run.id, message: pauseMsg },
+        });
+      }
+
+      if (body.action === "resume") {
+        if (run.status !== "PAUSED_USER" && run.status !== "FAILED") {
+          return reply.code(409).send({ error: "This run is not paused. Nothing to resume." });
+        }
+        await setControl(run.id, "pause", "0");
+        await setControl(run.id, "stop", "0");
+        await prisma.workflowRun.update({
+          where: { id: run.id },
+          data: { status: "RUNNING", errorMessage: null, endedAt: null },
+        });
+        const resumeRun = await prisma.workflowRun.findUnique({ where: { id: run.id } });
+        if (resumeRun) {
+          const triggered = await triggerEnquiryResumeAfterControl(resumeRun);
+          if (!triggered.ok) {
+            req.log.warn({ runId: run.id, reason: triggered.reason }, "resume automation trigger failed");
+            await publishWorkflowEvent({
+              type: SocketEvents.LOG_LINE,
+              dealerId: run.dealerId,
+              payload: {
+                workflowRunId: run.id,
+                level: "warn",
+                message: `${triggered.reason} Use Retry on Live session.`,
+                ts: new Date().toISOString(),
+              },
+            });
+          }
+        }
+      }
+
+      if (body.action === "stop") {
+        await setControl(run.id, "stop", "1");
+        await setControl(run.id, "pause", "0");
+        if (run.status === "PENDING") {
+          await purgeBullJobArtifacts(run.id);
+        } else {
+          void fetch(`${automationBase()}/internal/force-stop/${run.id}`, {
+            method: "POST",
+            headers: { "x-internal-secret": automationSecret() },
+          }).catch(() => undefined);
+        }
+        await prisma.workflowRun.update({
+          where: { id: run.id },
+          data: {
+            status: "STOPPED",
+            endedAt: new Date(),
+            errorMessage: stopMsg,
+          },
+        });
+        await publishWorkflowEvent({
+          type: SocketEvents.LOG_LINE,
+          dealerId: run.dealerId,
+          payload: {
+            workflowRunId: run.id,
+            level: "info",
+            message: stopMsg,
+            ts: new Date().toISOString(),
+          },
+        });
+        await reconcileStaleWorkflowRunsForDealer(run.dealerId);
+      }
+
+      await publishWorkflowEvent({
+        type: SocketEvents.CONTROL_ACK,
+        dealerId: run.dealerId,
+        payload: { workflowRunId: run.id, action: body.action, ok: true },
+      });
+      const updated = await prisma.workflowRun.findUnique({ where: { id: run.id } });
+      return { ok: true, action: body.action, status: updated?.status };
     },
   );
 
@@ -224,9 +386,12 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       }
 
       const params = automationRunParamsSchema.safeParse(run.runParams);
-      if (!params.success || params.data.operation !== "enquiry_transfer") {
+      if (
+        !params.success ||
+        (params.data.operation !== "enquiry_transfer" && params.data.operation !== "follow_up_skip")
+      ) {
         return reply.code(409).send({
-          error: "Resume is only available for enquiry transfer runs with saved options.",
+          error: "Resume is only available for enquiry transfer or follow up skip runs.",
         });
       }
 
@@ -253,6 +418,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
           dealerId: run.dealerId,
           id: { not: run.id },
           status: { in: ["PENDING", "RUNNING", "PAUSED_OTP"] },
+          runParams: { path: ["operation"], equals: params.data.operation },
         },
       });
       if (otherInFlight) {
@@ -275,16 +441,24 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       const base =
         env.GDMS_BASE_URL ??
         process.env.GDMS_BASE_URL ??
-        "https://ndms.hmil.net/cmm/cmmd/selectHome.dms";
+        "https://ndms.hmil.net/cmm/cmmi/selectLoginMain.dms";
       const wfRow = await prisma.dealerWorkflow.findFirst({
         where: { dealerId: run.dealerId, name: params.data.operation, version: "1" },
       });
+      const operation = params.data.operation;
       const operationWorkflow: WorkflowDefinition = wfRow?.definition
         ? (wfRow.definition as unknown as WorkflowDefinition)
-        : enquiryTransferWorkflow();
+        : operation === "follow_up_skip"
+          ? followUpSkipWorkflow()
+          : enquiryTransferWorkflow();
       const loginWorkflow = defaultLoginWorkflow(base);
 
-      const res = await fetch(`${automationBase()}/internal/resume-enquiry-transfer`, {
+      const resumePath =
+        operation === "follow_up_skip"
+          ? "internal/resume-follow-up-skip"
+          : "internal/resume-enquiry-transfer";
+
+      const res = await fetch(`${automationBase()}/${resumePath}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -297,7 +471,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
           gdmsPassword: password,
           loginWorkflow,
           operationWorkflow,
-          operation: params.data.operation,
+          operation,
           sources: params.data.sources,
           subSources: params.data.subSources,
         }),
@@ -329,7 +503,12 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
         });
       }
 
-      const res = await fetch(`${automationBase()}/internal/retry-enquiry-transfer`, {
+      const runParams = automationRunParamsSchema.safeParse(run.runParams);
+      const op = runParams.success ? runParams.data.operation : "enquiry_transfer";
+      const retryPath =
+        op === "follow_up_skip" ? "internal/retry-follow-up-skip" : "internal/retry-enquiry-transfer";
+
+      const res = await fetch(`${automationBase()}/${retryPath}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -344,69 +523,6 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       if (!res.ok) {
         return reply.code(502).send({ error: "Automation service could not start retry" });
       }
-      return { ok: true };
-    },
-  );
-
-  app.post<{ Params: { id: string } }>(
-    "/v1/workflow-runs/:id/requeue",
-    { preHandler: authPreHandler },
-    async (req, reply) => {
-      const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
-      if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
-      }
-      if (run.status !== "PENDING" && run.status !== "FAILED" && run.status !== "STOPPED") {
-        return reply.code(409).send({
-          error: "Requeue is only available for queued or failed runs.",
-        });
-      }
-
-      const params = automationRunParamsSchema.safeParse(run.runParams);
-      if (!params.success || !isEnabledAutomationOperation(params.data.operation)) {
-        return reply.code(409).send({ error: "This run has no valid automation options to requeue." });
-      }
-
-      const existing = await workflowQueue.getJob(run.id);
-      if (existing) {
-        const state = await existing.getState();
-        if (state === "active") {
-          return reply.code(409).send({ error: "This run is already being processed." });
-        }
-        await existing.remove();
-      }
-
-      const jobData: WorkflowJobData = {
-        runId: run.id,
-        dealerId: run.dealerId,
-        operation: params.data.operation,
-        sources: params.data.sources,
-        subSources: params.data.subSources,
-      };
-
-      await prisma.workflowRun.update({
-        where: { id: run.id },
-        data: {
-          status: "PENDING",
-          errorMessage: null,
-          endedAt: null,
-          startedAt: new Date(),
-        },
-      });
-      await workflowQueue.add("execute", jobData, { jobId: run.id });
-
-      await publishWorkflowEvent({
-        type: SocketEvents.LOG_LINE,
-        dealerId: run.dealerId,
-        payload: {
-          workflowRunId: run.id,
-          level: "info",
-          message: "Run queued again.",
-          ts: new Date().toISOString(),
-        },
-      });
-
       return { ok: true };
     },
   );
@@ -431,4 +547,52 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       };
     },
   );
+
+  app.get("/v1/gdms-browser-view", { preHandler: authPreHandler }, async (req, reply) => {
+    if (!env.GDMS_REMOTE_VIEW) {
+      return reply.code(404).send({ enabled: false });
+    }
+    const siteOrigin = env.CORS_ORIGIN.split(",")[0]?.trim() ?? "https://bot.edunexservices.in";
+    const password = env.GDMS_VNC_PASSWORD ?? "gdms";
+    const query = req.query as { workspace?: string };
+    const workspaceId =
+      query.workspace === "2" ? 2 : query.workspace === "1" ? 1 : undefined;
+
+    const buildUrl = (pathPrefix: string): string => {
+      const q = new URLSearchParams({
+        autoconnect: "true",
+        resize: "scale",
+        path: `${pathPrefix}/websockify`,
+        password,
+        reconnect: "true",
+      });
+      return `${siteOrigin}/${pathPrefix}/vnc.html?${q.toString()}`;
+    };
+
+    const workspaces = ([1, 2] as const).map((id) => {
+      const ws = GDMS_VNC_WORKSPACE[id];
+      return {
+        id: ws.id,
+        label: ws.label,
+        pathPrefix: ws.pathPrefix,
+        url: buildUrl(ws.pathPrefix),
+      };
+    });
+
+    if (workspaceId) {
+      const ws = GDMS_VNC_WORKSPACE[workspaceId];
+      return {
+        enabled: true,
+        workspace: workspaceId,
+        url: buildUrl(ws.pathPrefix),
+        workspaces,
+      };
+    }
+
+    return {
+      enabled: true,
+      url: buildUrl(GDMS_VNC_WORKSPACE[1].pathPrefix),
+      workspaces,
+    };
+  });
 }

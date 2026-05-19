@@ -13,6 +13,7 @@ import type { GdmsAccountSummary } from "@/lib/gdms-account";
 import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
 import type { UserInfo } from "@/stores/auth-store";
+import type { DealerAutomationSettingsPayload } from "@gdms/shared";
 
 async function resolveDealerIdForUser(token: string, user: UserInfo): Promise<string> {
   let list = await apiFetch<{ id: string; name: string }[]>("/v1/dealers", { token });
@@ -49,6 +50,10 @@ export default function SettingsPage() {
   const [pairMsg, setPairMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [ollamaModel, setOllamaModel] = useState("llama3.2");
+  const [followUpSkipEnabled, setFollowUpSkipEnabled] = useState(false);
+  const [followUpSkipStartTime, setFollowUpSkipStartTime] = useState("09:00");
+  const [automationSettingsOk, setAutomationSettingsOk] = useState(false);
+  const [automationSettingsSaving, setAutomationSettingsSaving] = useState(false);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -77,7 +82,23 @@ export default function SettingsPage() {
         setDealerId(id);
         if (!id)
           setErrMsg("We couldn't set up your dealer. Refresh the page or contact your administrator.");
-        else await refreshGdmsList(token, cancelled);
+        else {
+          await refreshGdmsList(token, cancelled);
+          if (id && !cancelled) {
+            try {
+              const settings = await apiFetch<DealerAutomationSettingsPayload>(
+                `/v1/dealers/${id}/automation-settings`,
+                { token },
+              );
+              if (!cancelled) {
+                setFollowUpSkipEnabled(settings.followUpSkipEnabled);
+                setFollowUpSkipStartTime(settings.followUpSkipStartTime ?? "09:00");
+              }
+            } catch {
+              /* optional */
+            }
+          }
+        }
       } catch (e) {
         if (!cancelled) setErrMsg(toUserMessage(e, "generic"));
       } finally {
@@ -187,6 +208,44 @@ export default function SettingsPage() {
     }
     storeLogout();
     router.replace("/login");
+  }
+
+  async function saveAutomationSettings(): Promise<void> {
+    setErrMsg(null);
+    setAutomationSettingsOk(false);
+    const tk = token;
+    if (!tk || !dealerId) {
+      setErrMsg("Dealer context missing.");
+      return;
+    }
+    if (followUpSkipEnabled && !followUpSkipStartTime.trim()) {
+      setErrMsg("Set a daily start time for Follow Up Skip (IST).");
+      return;
+    }
+    setAutomationSettingsSaving(true);
+    try {
+      const saved = await apiFetch<
+        DealerAutomationSettingsPayload & { stoppedRunIds?: string[] }
+      >(`/v1/dealers/${dealerId}/automation-settings`, {
+        method: "PUT",
+        token: tk,
+        body: JSON.stringify({
+          followUpSkipEnabled,
+          followUpSkipStartTime: followUpSkipEnabled ? followUpSkipStartTime.trim() : null,
+        }),
+      });
+      setAutomationSettingsOk(true);
+      setPairMsg(null);
+      if (!followUpSkipEnabled && (saved.stoppedRunIds?.length ?? 0) > 0) {
+        setPairMsg(
+          `Follow Up Skip disabled — force-stopped ${saved.stoppedRunIds!.length} running automation(s).`,
+        );
+      }
+    } catch (e) {
+      setErrMsg(toUserMessage(e, "generic"));
+    } finally {
+      setAutomationSettingsSaving(false);
+    }
   }
 
   async function pairAndroid(): Promise<void> {
@@ -317,6 +376,55 @@ export default function SettingsPage() {
           )}
           <Button variant="outline" disabled={bootstrapPending || !dealerId} onClick={() => void saveWorkflow()}>
             Save workflow
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Follow Up Skip (Today&apos;s Follow Up)</CardTitle>
+        </CardHeader>
+        <CardContent className="max-w-xl space-y-4">
+          <p className="text-sm text-zinc-600">
+            Daily automation: GDMS → car icon → Booking/Retail Mgt → Today&apos;s Follow Up → Search → saves
+            follow-up on each row. Can run in parallel with enquiry transfer in a separate browser.
+          </p>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="rounded border-zinc-300"
+              checked={followUpSkipEnabled}
+              onChange={(e) => setFollowUpSkipEnabled(e.target.checked)}
+            />
+            Follow Up Skip enabled
+          </label>
+          <p className="text-xs text-zinc-500">
+            Disabling the toggle immediately force-stops any running Follow Up Skip automation.
+          </p>
+          {followUpSkipEnabled ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="follow-up-skip-time">Daily start time (IST, 24h)</Label>
+              <Input
+                id="follow-up-skip-time"
+                type="time"
+                value={followUpSkipStartTime}
+                onChange={(e) => setFollowUpSkipStartTime(e.target.value)}
+              />
+              <p className="text-xs text-zinc-500">
+                Automation starts at this time every day until you disable it or change the time.
+              </p>
+            </div>
+          ) : null}
+          {automationSettingsOk ? (
+            <StatusBanner variant="success" title="Automation settings saved">
+              Follow Up Skip schedule updated.
+            </StatusBanner>
+          ) : null}
+          <Button
+            disabled={bootstrapPending || !dealerId || automationSettingsSaving}
+            onClick={() => void saveAutomationSettings()}
+          >
+            {automationSettingsSaving ? "Saving…" : "Save automation settings"}
           </Button>
         </CardContent>
       </Card>

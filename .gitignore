@@ -6,6 +6,8 @@ dist
 .env
 .env.local
 scripts/kvm.host
+.env.pc-option-b
+**/.env.pc-option-b
 *.log
 playwright-report
 test-results

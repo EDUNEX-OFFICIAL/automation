@@ -12,6 +12,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { LiveRunNavBadge } from "@/components/live-run-nav-badge";
 import { cn } from "@/lib/utils";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -117,7 +118,10 @@ export function DashboardNavDrawer({ open, onClose, userEmail }: DashboardNavDra
                   <Icon className="h-[1.15rem] w-[1.15rem]" strokeWidth={active ? 2.25 : 2} />
                 </span>
                 <span className="flex flex-col">
-                  <span className="text-sm font-semibold leading-tight">{item.label}</span>
+                  <span className="flex items-center text-sm font-semibold leading-tight">
+                    {item.label}
+                    {item.href === "/live-session" ? <LiveRunNavBadge /> : null}
+                  </span>
                   {active && (
                     <span className="text-[11px] font-medium text-white/60">Current page</span>
                   )}

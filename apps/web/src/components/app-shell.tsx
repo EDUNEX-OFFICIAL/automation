@@ -6,15 +6,20 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { OtpModal } from "@/components/otp-modal";
+import { useHealAutomationOnRefresh } from "@/hooks/use-heal-automation-on-refresh";
 import { useRealtimeSocket } from "@/hooks/use-realtime-socket";
+import { useLiveStore } from "@/stores/live-store";
 import { DashboardNavDrawer, dashboardNav } from "@/components/dashboard-nav-drawer";
+import { LiveRunNavBadge } from "@/components/live-run-nav-badge";
 import { MenuToggle } from "@/components/menu-toggle";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user } = useAuthStore();
   const [navOpen, setNavOpen] = useState(false);
+  const liveRunId = useLiveStore((s) => s.runId);
   useRealtimeSocket();
+  useHealAutomationOnRefresh(liveRunId);
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -54,7 +59,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   )}
                 >
                   <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 2} />
-                  {n.label}
+                  <span className="flex items-center">
+                    {n.label}
+                    {n.href === "/live-session" ? <LiveRunNavBadge /> : null}
+                  </span>
                 </Link>
               );
             })}

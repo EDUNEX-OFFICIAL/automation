@@ -5,12 +5,19 @@ import type { ExecutePayload } from "./runner.js";
 export type ActiveAutomationSession = {
   runId: string;
   dealerId: string;
+  /** Chromium profile key — allows parallel runs (e.g. enquiry_transfer + follow_up_skip). */
+  profileKey: string;
   page: Page;
   context: BrowserContext;
   payload: ExecutePayload;
   captureFrame: () => Promise<void>;
   stopScreenshots: () => void;
 };
+
+export function browserProfileKeyForOperation(dealerId: string, operation: string): string {
+  if (operation === "follow_up_skip") return `${dealerId}-follow-up-skip`;
+  return dealerId;
+}
 
 const sessions = new Map<string, ActiveAutomationSession>();
 
@@ -28,6 +35,41 @@ export function unregisterActiveSession(runId: string): void {
 
 export function hasActiveSession(runId: string): boolean {
   return sessions.has(runId);
+}
+
+/** Closes browser for this run if still registered (Stop from Live session). */
+export async function forceStopSession(runId: string): Promise<boolean> {
+  const s = sessions.get(runId);
+  if (!s) return false;
+  try {
+    s.stopScreenshots();
+    await s.context.close();
+  } catch {
+    /* ignore close errors */
+  }
+  sessions.delete(runId);
+  return true;
+}
+
+/** Close active browser for this dealer + profile (same operation shares one profile). */
+export async function closeActiveSessionsForDealer(
+  dealerId: string,
+  profileKey?: string,
+): Promise<void> {
+  const toClose = [...sessions.values()].filter((s) => {
+    if (s.dealerId !== dealerId) return false;
+    if (profileKey && s.profileKey !== profileKey) return false;
+    return true;
+  });
+  for (const s of toClose) {
+    try {
+      s.stopScreenshots();
+      await s.context.close();
+    } catch {
+      /* ignore */
+    }
+    sessions.delete(s.runId);
+  }
 }
 
 export type RetrySessionContext = {

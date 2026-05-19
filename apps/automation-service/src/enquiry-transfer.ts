@@ -23,6 +23,7 @@ import {
   flyoutShowsCustomerEnquiryMgt,
   isCustomerEnquiryTreeExpanded,
   isOnCustomerEnquiryList,
+  isOnTodaysFollowUpList,
   isSalesFlyoutOnlyOpen,
   resolveGdmsUiRoot,
   waitForCustomerEnquiryTreeExpanded,
@@ -97,7 +98,9 @@ function escapeRegExp(s: string): string {
 
 /** GDMS labels use HMIL; tolerate legacy HMI typos in UI or saved run params. */
 function gdmsLabelNorm(s: string): string {
-  return norm(s).replace(/\bhmi\b/g, "hmil");
+  return norm(s)
+    .replace(/\bhmi\b/g, "hmil")
+    .replace(/\bcenter\b/g, "centre");
 }
 
 /** Bidirectional partial match (case-insensitive normalized). */
@@ -105,7 +108,10 @@ function partialMatch(a: string, b: string): boolean {
   const na = gdmsLabelNorm(a);
   const nb = gdmsLabelNorm(b);
   if (!na || !nb) return false;
-  return na.includes(nb) || nb.includes(na);
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const ca = na.replace(/\s+/g, "");
+  const cb = nb.replace(/\s+/g, "");
+  return ca.length > 0 && cb.length > 0 && (ca.includes(cb) || cb.includes(ca));
 }
 
 type SourceCriteria = { source: string; subSource?: string };
@@ -142,15 +148,21 @@ function splitSourceColumns(
   return { source: enquirySource, subSource: enquirySubSource };
 }
 
-/** Selected source matches row source column OR selected sub matches row sub column (partial). */
+/**
+ * Row matches one allowed (source, sub-source) pair from the dashboard.
+ * When a sub-source was selected, both source and sub must match (not source alone).
+ */
 function criterionMatchesRow(
   c: SourceCriteria,
   rowSourceCol: string,
   rowSubCol: string,
 ): boolean {
   const srcHit = partialMatch(c.source, rowSourceCol);
-  const subHit = c.subSource ? partialMatch(c.subSource, rowSubCol) : false;
-  return srcHit || subHit;
+  if (!c.subSource) {
+    return srcHit;
+  }
+  const subHit = partialMatch(c.subSource, rowSubCol);
+  return srcHit && subHit;
 }
 
 function rowMatchesCriteria(
@@ -388,8 +400,13 @@ async function parseResultRowsDetailed(
       placeholderOnly = true;
       continue;
     }
-    const source = texts[cols.sourceIdx] ?? "";
-    const subSource = texts[cols.subSourceIdx] ?? "";
+    let source = texts[cols.sourceIdx] ?? "";
+    let subSource = texts[cols.subSourceIdx] ?? "";
+    if (!subSource.trim() && source.includes("/")) {
+      const split = splitSourceColumns(source, "");
+      source = split.source;
+      subSource = split.subSource;
+    }
     if (!source) continue;
     out.push({ row, source, subSource });
   }
@@ -601,12 +618,56 @@ async function findMatchingRowFromAllSources(
     }
   }
 
+  const sample = parsed
+    .slice(0, 5)
+    .map((r) => `${r.source}${r.subSource ? ` / ${r.subSource}` : ""}`)
+    .join("; ");
   await log(
     "info",
-    `No row matched workflow sources/sub-sources (${formatCriteriaSummary(criteria)}) — will Search again after a short wait.`,
+    `No row matched workflow sources/sub-sources (${formatCriteriaSummary(criteria)}). Sample rows: ${sample || "(none)"} — will Search again.`,
   );
   await searchIntervalDelay();
   return null;
+}
+
+async function readEnquirySourceFieldsFromModal(
+  page: Page,
+): Promise<{ source: string; subSource: string } | null> {
+  try {
+    const modal = await visibleEnquiryModal(page);
+    if (!(await modal.isVisible({ timeout: 2_000 }).catch(() => false))) return null;
+    await ensureBasicInfoTabActive(modal);
+    const formRoot = await enquiryModalFormRoot(modal);
+    const dt = formRoot.locator("dt").filter({ hasText: /^Enquiry\s*Source/i }).first();
+    if (await dt.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      const dd = dt.locator("xpath=following-sibling::dd[1]");
+      const parts = await dd
+        .locator(".k-input-value-text, span.k-input-value-text, .k-input-inner, span.k-input")
+        .allTextContents();
+      const cleaned = parts.map((p) => p.trim()).filter(Boolean);
+      if (cleaned.length >= 2) {
+        return { source: cleaned[0]!, subSource: cleaned.slice(1).join(" ") };
+      }
+      if (cleaned.length === 1) {
+        return splitSourceColumns(cleaned[0]!, "");
+      }
+    }
+    const primary = await readDropdownDisplayNearLabel(modal, /^Enquiry\s*Source/i);
+    if (!primary.trim()) return null;
+    return splitSourceColumns(primary, "");
+  } catch {
+    return null;
+  }
+}
+
+export async function closeVisibleEnquiryModal(page: Page, log: EnquiryTransferContext["log"]): Promise<void> {
+  const modal = await visibleEnquiryModal(page);
+  const close = modal.locator(".k-window-titlebar .k-i-close, .k-window-actions .k-i-close").first();
+  if (await close.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    await close.click({ force: true, timeout: 5_000 });
+    await humanDelay(600, 1200);
+    await log("info", "Closed enquiry modal to return to list search.");
+  }
 }
 
 function enquiryInfoModalIn(ui: GdmsUiRoot): Locator {
@@ -695,7 +756,7 @@ async function visibleEnquiryModal(page: Page): Promise<Locator> {
   return enquiryInfoModalIn(page).last();
 }
 
-async function isAnyEnquiryModalVisible(page: Page): Promise<boolean> {
+export async function isAnyEnquiryModalVisible(page: Page): Promise<boolean> {
   for (const ui of listUiContexts(page)) {
     if (await enquiryInfoModalIn(ui).first().isVisible({ timeout: 400 }).catch(() => false)) return true;
     if (await enquiryWindowWithBasicSaveIn(ui).first().isVisible({ timeout: 400 }).catch(() => false)) {
@@ -729,7 +790,7 @@ async function visiblePinDialog(page: Page): Promise<Locator> {
 }
 
 /** Double-click row; returns the page that hosts SALES CUSTOMER ENQUIRY INFO (popup or same tab). */
-async function openEnquiryDetailPage(row: Locator): Promise<Page> {
+export async function openEnquiryDetailPage(row: Locator): Promise<Page> {
   const listPage = row.page();
   const popupPromise = listPage.waitForEvent("popup", { timeout: 6_000 }).catch(() => null);
   await setAutomationInputBypass(listPage, true);
@@ -1367,6 +1428,71 @@ async function firstVisibleIn(loc: Locator, selectors: readonly string[]): Promi
   return null;
 }
 
+/** True when element sits inside Follow Up History / list grids (not the editable form). */
+async function isInKendoDataGrid(loc: Locator): Promise<boolean> {
+  return loc
+    .evaluate((el) => Boolean(el.closest(".k-grid, [data-role='grid'], table.k-selectable")))
+    .catch(() => false);
+}
+
+/** Editable Follow Up fields block (excludes history grid at bottom). */
+async function resolveFollowUpFieldsContainer(formRoot: Locator): Promise<Locator> {
+  try {
+    const remarks = await resolveFollowUpRemarksInput(formRoot);
+    const box = remarks.locator(
+      "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
+    );
+    if (await box.isVisible({ timeout: 2_000 }).catch(() => false)) return box;
+  } catch {
+    /* fall through */
+  }
+  const history = formRoot.getByText(/^Follow Up History/i).first();
+  if (await history.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    const section = history.locator(
+      "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
+    );
+    if (await section.isVisible({ timeout: 1_000 }).catch(() => false)) return section;
+  }
+  return formRoot;
+}
+
+async function kendoDropdownTriggerAfterLabelCell(labelCell: Locator): Promise<Locator | null> {
+  const nextCell = labelCell.locator("xpath=following-sibling::td[1] | following-sibling::dd[1]");
+  const inNext = await firstVisibleIn(nextCell, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+  if (inNext) return inNext;
+  const inSameCell = await firstVisibleIn(labelCell, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+  if (inSameCell) return inSameCell;
+  const following = labelCell.locator(
+    "xpath=following::span.k-select[1] | following::.k-dropdown-wrap[1] | following::span.k-input[1]",
+  );
+  if (await following.first().isVisible({ timeout: 800 }).catch(() => false)) {
+    return following.first();
+  }
+  const row = labelCell.locator("xpath=ancestor::tr[1]");
+  const pickIndex = await labelCell
+    .evaluate((label) => {
+      const row = label.closest("tr");
+      if (!row) return -1;
+      const triggers = Array.from(
+        row.querySelectorAll("span.k-select, .k-dropdown-wrap, .k-widget.k-dropdown"),
+      );
+      if (triggers.length === 0) return -1;
+      const labelRect = label.getBoundingClientRect();
+      for (let i = 0; i < triggers.length; i++) {
+        const r = triggers[i]!.getBoundingClientRect();
+        if (r.left >= labelRect.left - 4) return i;
+      }
+      return triggers.length - 1;
+    })
+    .catch(() => -1);
+  if (pickIndex >= 0) {
+    const triggers = row.locator("span.k-select, .k-dropdown-wrap, .k-widget.k-dropdown");
+    const picked = triggers.nth(pickIndex);
+    if (await picked.isVisible({ timeout: 800 }).catch(() => false)) return picked;
+  }
+  return firstVisibleIn(row, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+}
+
 /** Kendo DropDownList: open via span.k-select beside label (dt/dd, table row, or Enquiry Info grid). */
 async function resolveKendoDropdownTriggerNearLabel(
   formRoot: Locator,
@@ -1436,6 +1562,155 @@ async function resolveKendoDropdownTriggerNearLabel(
   if (await following.first().isVisible({ timeout: 800 }).catch(() => false)) {
     return following.first();
   }
+
+  throw new Error(`Kendo dropdown trigger not found for label ${String(label)}`);
+}
+
+function normalizeFollowUpFieldLabel(text: string): string {
+  return text.replace(/\s+/g, " ").replace(/\*/g, "").trim();
+}
+
+function isExactFollowUpTypeLabel(text: string): boolean {
+  const n = normalizeFollowUpFieldLabel(text);
+  return /^Follow Up Type$/i.test(n);
+}
+
+function isExactNextFollowUpTypeLabel(text: string): boolean {
+  const n = normalizeFollowUpFieldLabel(text);
+  return /^Next Follow Up Type$/i.test(n);
+}
+
+/** Follow Up Skip: dropdown on same row as Follow Up Time / Next Follow Up Time. */
+async function resolveFollowUpSkipDropdownByTimeRow(
+  formRoot: Locator,
+  timeLabelRe: RegExp,
+  typeMatcher: (text: string) => boolean,
+): Promise<Locator | null> {
+  const timeLabels = formRoot.locator("td, th, dt, label, span").filter({ hasText: timeLabelRe });
+  const n = await timeLabels.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const timeLabel = timeLabels.nth(i);
+    if (await isInKendoDataGrid(timeLabel)) continue;
+    if (!(await timeLabel.isVisible({ timeout: 600 }).catch(() => false))) continue;
+
+    const row = timeLabel.locator("xpath=ancestor::tr[1]");
+    if ((await row.count().catch(() => 0)) < 1) continue;
+
+    const typeCells = row.locator("td, th, label, span");
+    const tc = await typeCells.count().catch(() => 0);
+    for (let j = 0; j < tc; j++) {
+      const cell = typeCells.nth(j);
+      const cellText = normalizeFollowUpFieldLabel((await cell.innerText().catch(() => "")) ?? "");
+      if (!typeMatcher(cellText)) continue;
+      const trigger = await kendoDropdownTriggerAfterLabelCell(cell);
+      if (trigger) return trigger;
+    }
+
+    const triggers = row.locator(
+      ".k-widget.k-dropdown span.k-select, .k-dropdown span.k-select, .k-dropdown-wrap span.k-select",
+    );
+    const triggerCount = await triggers.count().catch(() => 0);
+    if (triggerCount >= 1) {
+      return triggers.nth(triggerCount - 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Follow Up Skip only — ignores history grid headers; picks dropdown beside label (not time picker).
+ * Do not use for enquiry transfer (uses resolveKendoDropdownTriggerNearLabel).
+ */
+async function resolveFollowUpSkipKendoDropdownTriggerNearLabel(
+  formRoot: Locator,
+  label: RegExp,
+): Promise<Locator> {
+  if (label.source === FOLLOW_UP_TYPE_LABEL_RE.source) {
+    const byRow = await resolveFollowUpSkipDropdownByTimeRow(
+      formRoot,
+      /^Follow Up Time$/i,
+      isExactFollowUpTypeLabel,
+    );
+    if (byRow) return byRow;
+  }
+  if (/Next Follow Up Type/i.test(label.source)) {
+    const byRow = await resolveFollowUpSkipDropdownByTimeRow(
+      formRoot,
+      /Next Follow Up Time/i,
+      isExactNextFollowUpTypeLabel,
+    );
+    if (byRow) return byRow;
+  }
+
+  const dts = formRoot.locator("dt").filter({ hasText: label });
+  const dtCount = await dts.count().catch(() => 0);
+  for (let i = 0; i < dtCount; i++) {
+    const dt = dts.nth(i);
+    if (!(await dt.isVisible({ timeout: 600 }).catch(() => false))) continue;
+    if (await isInKendoDataGrid(dt)) continue;
+    const dd = dt.locator("xpath=following-sibling::dd[1]");
+    const inDd = await firstVisibleIn(dd, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+    if (inDd) return inDd;
+    const boxForm = dt.locator("xpath=ancestor::*[contains(@class,'box_form')][1]");
+    const inBox = await firstVisibleIn(boxForm, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+    if (inBox) return inBox;
+  }
+
+  const labelCells = formRoot.locator("td, th, dt, label, span");
+  const cellCount = await labelCells.count().catch(() => 0);
+  for (let i = 0; i < cellCount; i++) {
+    const labelCell = labelCells.nth(i);
+    if (!(await labelCell.isVisible({ timeout: 600 }).catch(() => false))) continue;
+    if (await isInKendoDataGrid(labelCell)) continue;
+    const cellText = normalizeFollowUpFieldLabel((await labelCell.innerText().catch(() => "")) ?? "");
+    if (label.source === FOLLOW_UP_TYPE_LABEL_RE.source && !isExactFollowUpTypeLabel(cellText)) {
+      continue;
+    }
+    if (/Next Follow Up Type/i.test(label.source) && !isExactNextFollowUpTypeLabel(cellText)) {
+      continue;
+    }
+    if (
+      label.source !== FOLLOW_UP_TYPE_LABEL_RE.source &&
+      !/Next Follow Up Type/i.test(label.source) &&
+      !label.test(cellText)
+    ) {
+      continue;
+    }
+    const trigger = await kendoDropdownTriggerAfterLabelCell(labelCell);
+    if (trigger) return trigger;
+  }
+
+  const labelEls = formRoot.locator("dt, th, td, label, span").filter({ hasText: label });
+  const labelCount = await labelEls.count().catch(() => 0);
+  let labelEl: Locator | null = null;
+  for (let i = 0; i < labelCount; i++) {
+    const candidate = labelEls.nth(i);
+    if (await isInKendoDataGrid(candidate)) continue;
+    if (await candidate.isVisible({ timeout: 600 }).catch(() => false)) {
+      labelEl = candidate;
+      break;
+    }
+  }
+  if (!labelEl) {
+    for (let i = 0; i < labelCount; i++) {
+      const candidate = labelEls.nth(i);
+      if (!(await isInKendoDataGrid(candidate))) {
+        labelEl = candidate;
+        break;
+      }
+    }
+  }
+  if (!labelEl) {
+    throw new Error(`Kendo dropdown trigger not found for label ${String(label)}`);
+  }
+  await labelEl.waitFor({ state: "visible", timeout: 5_000 });
+  const fromCell = await kendoDropdownTriggerAfterLabelCell(labelEl);
+  if (fromCell) return fromCell;
+  const section = labelEl.locator(
+    "xpath=ancestor::*[contains(@class,'box_form') or self::tr or self::dl][1]",
+  );
+  const inSection = await firstVisibleIn(section, KENDO_DROPDOWN_TRIGGER_SELECTORS);
+  if (inSection) return inSection;
 
   throw new Error(`Kendo dropdown trigger not found for label ${String(label)}`);
 }
@@ -2954,6 +3229,47 @@ async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> 
   throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
 }
 
+/** Follow Up Skip: click remarks (cursor at end), type …, then blur toward Follow Up Type. */
+async function fillFollowUpRemarksForSkip(
+  page: Page,
+  modal: Locator,
+  formRoot: Locator,
+  log: EnquiryTransferContext["log"],
+): Promise<void> {
+  const remarks = await resolveFollowUpRemarksInput(formRoot);
+  await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+
+  await withModalInputBypass(modal, async () => {
+    await remarks.click({ timeout: scaleMs(10_000) });
+    await remarks.fill(FOLLOW_UP_SKIP_REMARKS);
+    await humanDelay(350, 600);
+
+    const box = await remarks.boundingBox();
+    if (box && box.width > 4 && box.height > 4) {
+      await page.mouse.click(box.x + box.width - 10, box.y + box.height - 10);
+      await log("info", "Follow Up Remarks — clicked end of field (cursor position).");
+    } else {
+      await remarks.click();
+      await remarks.press("End").catch(() => {});
+    }
+    await humanDelay(300, 550);
+
+    const typeHint = formRoot
+      .locator("td, th, dt, label, span")
+      .filter({ hasText: /^Follow Up Type/i })
+      .filter({ hasNotText: /Next/i })
+      .first();
+    if (await typeHint.isVisible({ timeout: 1_500 }).catch(() => false)) {
+      await typeHint.click({ force: true, timeout: scaleMs(8_000) });
+      await log("info", "Follow Up Remarks done — focus moved to Follow Up Type.");
+    } else {
+      await page.keyboard.press("Tab").catch(() => {});
+    }
+  });
+
+  await log("info", `Follow Up Remarks = "${FOLLOW_UP_SKIP_REMARKS}".`);
+}
+
 async function setNextFollowUpTime(
   page: Page,
   log: EnquiryTransferContext["log"],
@@ -3076,6 +3392,353 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
+/** Remarks for Today's Follow Up skip automation (three dots only). */
+export const FOLLOW_UP_SKIP_REMARKS = "...";
+
+/**
+ * Next Follow Up date for skip flow (IST): tomorrow @ 9:30 PM;
+ * Saturday → Monday (skip Sunday).
+ */
+export function followUpSkipNextDateIst(now = new Date()): {
+  day: number;
+  month: number;
+  year: number;
+} {
+  const { day, month, year } = istDateParts(now);
+  const dow = istDayOfWeek(year, month, day);
+  let addDays = dow === 6 ? 2 : 1;
+  let target = addIstCalendarDays(year, month, day, addDays);
+  while (istDayOfWeek(target.year, target.month, target.day) === 0) {
+    target = addIstCalendarDays(target.year, target.month, target.day, 1);
+  }
+  return target;
+}
+
+export type FollowUpSkipContext = Pick<
+  EnquiryTransferContext,
+  "log" | "shouldStop" | "waitIfPaused" | "signalManualIntervention"
+>;
+
+async function readFollowUpSkipDropdownDisplay(modal: Locator, label: RegExp): Promise<string> {
+  try {
+    const formRoot = await enquiryModalFormRoot(modal);
+    const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
+    const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
+    const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
+    const display = host.locator("span.k-input, .k-input-value, input[role='combobox'], input").first();
+    if (await display.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      const text = (await display.innerText().catch(() => "")).trim();
+      if (text) return text;
+      return (await display.inputValue().catch(() => "")).trim();
+    }
+  } catch {
+    /* fall through */
+  }
+  return readDropdownDisplayNearLabel(modal, label);
+}
+
+async function openFollowUpSkipKendoDropdownNearLabel(
+  modal: Locator,
+  label: RegExp,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
+  const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
+  await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
+  if (log) await log("info", `Opening ${String(label)} dropdown (Follow Up Skip).`);
+
+  const page = modal.page();
+  const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
+  const kInput = host.locator("span.k-input").first();
+  const kSelect = host.locator("span.k-select").first();
+
+  const tryOpen = async (): Promise<boolean> => {
+    if (await kendoListPopupVisible(page)) return true;
+    for (const target of [kInput, kSelect, host.locator(".k-dropdown-wrap").first(), trigger]) {
+      if (!(await target.isVisible({ timeout: 600 }).catch(() => false))) continue;
+      await target.click({ force: true, timeout: scaleMs(10_000) });
+      await humanDelay(450, 900);
+      if (await kendoListPopupVisible(page)) return true;
+    }
+    await tryOpenKendoWidgetViaDom(trigger);
+    await humanDelay(400, 900);
+    return kendoListPopupVisible(page);
+  };
+
+  if (!(await tryOpen())) {
+    throw new Error(`Kendo list did not open for ${String(label)} (Follow Up Skip).`);
+  }
+}
+
+/** Type P in list filter (or keyboard) and confirm Phone — Follow Up Skip only. */
+async function typeaheadPhoneInOpenKendoList(page: Page): Promise<void> {
+  for (const ui of listUiContexts(page)) {
+    const filter = ui
+      .locator(
+        ".k-list-filter input, .k-animation-container:visible .k-list-filter input, .k-popup:visible input[type='text']",
+      )
+      .first();
+    if (!(await filter.isVisible({ timeout: 900 }).catch(() => false))) continue;
+    await filter.click({ force: true });
+    await filter.fill("");
+    await filter.pressSequentially("p", { delay: scaledRandomBetween(80, 130) });
+    await humanDelay(300, 550);
+    const phoneItem = ui
+      .locator(
+        ".k-list-container:visible .k-list-item, .k-popup:visible .k-list-item, ul.k-list:visible li",
+      )
+      .filter({ hasText: /^phone$/i })
+      .first();
+    if (await phoneItem.isVisible({ timeout: 2_500 }).catch(() => false)) {
+      await phoneItem.click({ force: true });
+      return;
+    }
+    await filter.press("Enter");
+    return;
+  }
+  await page.keyboard.press("p");
+  await humanDelay(280, 500);
+  await page.keyboard.press("Enter");
+}
+
+async function selectFollowUpSkipPhoneDropdown(
+  page: Page,
+  modal: Locator,
+  label: RegExp,
+  log: EnquiryTransferContext["log"],
+): Promise<void> {
+  const current = (await readFollowUpSkipDropdownDisplay(modal, label)).trim();
+  if (/^phone$/i.test(current)) {
+    await log("info", `${String(label)} already Phone — skipping.`);
+    return;
+  }
+
+  await log("info", `${String(label)} — click dropdown, type P, Enter.`);
+  await withModalInputBypass(modal, async () => {
+    await dismissTransientKendoPopups(page);
+    await openFollowUpSkipKendoDropdownNearLabel(modal, label, log);
+    await typeaheadPhoneInOpenKendoList(page);
+    await humanDelay(400, 750);
+    await dismissTransientKendoPopups(page);
+  });
+
+  let after = (await readFollowUpSkipDropdownDisplay(modal, label)).trim();
+  if (!/^phone$/i.test(after)) {
+    await log(
+      "warn",
+      `${String(label)} typeahead did not show Phone (display="${after || "(empty)"}") — picking Phone from list.`,
+    );
+    await withModalInputBypass(modal, async () => {
+      await dismissTransientKendoPopups(page);
+      await openFollowUpSkipKendoDropdownNearLabel(modal, label, log);
+      const formRoot = await enquiryModalFormRoot(modal);
+      await clickOptionInFormRoot(formRoot, /^Phone$/i);
+      await dismissTransientKendoPopups(page);
+    });
+    after = (await readFollowUpSkipDropdownDisplay(modal, label)).trim();
+  }
+  if (!/^phone$/i.test(after)) {
+    throw new Error(`${String(label)} is not Phone after select (display="${after || "(empty)"}").`);
+  }
+  await log("info", `${String(label)} = Phone.`);
+}
+
+async function isFollowUpSkipReadyForSave(modal: Locator): Promise<boolean> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  try {
+    const remarks = await resolveFollowUpRemarksInput(formRoot);
+    const t = (await remarks.inputValue().catch(() => "")).trim();
+    if (t !== FOLLOW_UP_SKIP_REMARKS) return false;
+  } catch {
+    return false;
+  }
+  if (!/^phone$/i.test((await readFollowUpSkipDropdownDisplay(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim())) {
+    return false;
+  }
+  if (!/^phone$/i.test((await readFollowUpSkipDropdownDisplay(modal, /Next Follow Up Type/i)).trim())) {
+    return false;
+  }
+  return isNextFollowUpTimeFilled(modal);
+}
+
+async function waitForFollowUpSkipReadyForSave(
+  modal: Locator,
+  log: EnquiryTransferContext["log"],
+  timeoutMs = 12_000,
+): Promise<void> {
+  const page = modal.page();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isFollowUpSkipReadyForSave(modal)) {
+      await log("info", "Follow Up Skip form complete — ready for Save.");
+      return;
+    }
+    await dismissTransientKendoPopups(page);
+    await pollDelay(350);
+  }
+  throw new Error(`Follow Up Skip not ready for Save (${await describeFollowUpReadiness(modal)}).`);
+}
+
+async function setNextFollowUpTimeForSkip(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+): Promise<void> {
+  const modal = await visibleEnquiryModal(page);
+  const formRoot = await enquiryModalFormRoot(modal);
+  const target = followUpSkipNextDateIst();
+  await log(
+    "info",
+    `Next Follow Up (skip) — ${target.day}/${target.month}/${target.year} @ 9:30 PM IST (Sat→Mon, no Sunday).`,
+  );
+
+  const row = await resolveNextFollowUpTimeRow(formRoot);
+  await row.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
+
+  await withModalInputBypass(modal, async () => {
+    await clickNextFollowUpCalendarTrigger(row, log);
+  });
+  await pause("normal");
+
+  const picker = await findVisibleDateTimePicker(page);
+  await picker.waitFor({ state: "visible", timeout: 4_000 });
+  const calendar = picker.locator(".k-calendar").first();
+  const calendarRoot = (await calendar.isVisible({ timeout: 2_000 }).catch(() => false))
+    ? calendar
+    : picker;
+
+  await navigateCalendarToDate(calendarRoot, target);
+  const dayCell = calendarRoot
+    .locator("td:not(.k-other-month):not(.k-state-disabled), [role='gridcell']:not([aria-disabled='true'])")
+    .filter({ hasText: new RegExp(`^\\s*${target.day}\\s*$`) })
+    .first();
+  await dayCell.click({ timeout: 6_000 });
+  await pause("short");
+
+  let timeVisible = false;
+  for (const pattern of [/9:30\s*PM/i, /9\.30\s*PM/i]) {
+    if (await page.getByText(pattern).first().isVisible({ timeout: 600 }).catch(() => false)) {
+      timeVisible = true;
+      break;
+    }
+  }
+  if (!timeVisible) {
+    await withModalInputBypass(modal, async () => {
+      await clickNextFollowUpClockTrigger(row, log);
+    });
+    await pause("short");
+  }
+
+  await withModalInputBypass(modal, async () => {
+    await selectTime930PmInPicker(page, log);
+  });
+  await closeDateTimePickerWithoutClosingModal(modal);
+  await pause("short");
+}
+
+/** Fill Follow Up tab on enquiry modal for Today's Follow Up skip (no Basic Info / PIN). */
+export async function completeFollowUpTabForSkip(
+  page: Page,
+  ctx: FollowUpSkipContext,
+): Promise<void> {
+  const { log } = ctx;
+  const modal = await visibleEnquiryModal(page);
+  const formRoot = await enquiryModalFormRoot(modal);
+  await humanHoverClick(formRoot.getByText(/^Follow Up$/i));
+  await pause("short");
+  await log("info", "Follow Up tab — filling remarks, types (P), next time, then Save.");
+
+  await fillFollowUpRemarksForSkip(page, modal, formRoot, log);
+  await pause("normal");
+
+  await dismissTransientKendoPopups(page);
+  await selectFollowUpSkipPhoneDropdown(page, modal, FOLLOW_UP_TYPE_LABEL_RE, log);
+  await pause("normal");
+  await selectFollowUpSkipPhoneDropdown(page, modal, /Next Follow Up Type/i, log);
+  await pause("normal");
+
+  if (!(await isNextFollowUpTimeFilled(modal))) {
+    await log("info", "Next Follow Up Time — opening calendar.");
+    await setNextFollowUpTimeForSkip(page, log);
+  } else {
+    await log("info", "Next Follow Up Time already set — skipping.");
+  }
+  await pause("normal");
+
+  if (!(await isEnquiryTypeDisplayCold(modal))) {
+    await scrollEnquiryInfoBottomIntoView(modal);
+    try {
+      await selectEnquiryTypeColdOnce(modal, log);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await log("warn", `Enquiry Type Cold optional step failed: ${msg} — continuing to Save.`);
+    }
+  } else {
+    await log("info", "Enquiry Type already Cold — skipping.");
+  }
+  await saveFollowUpSkipUntilSuccess(page, log, ctx);
+}
+
+async function saveFollowUpSkipUntilSuccess(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+  ctx: FollowUpSkipContext,
+): Promise<void> {
+  let modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
+  try {
+    await waitForFollowUpSkipReadyForSave(modal, log, 10_000);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await log("warn", `${msg} — attempting Follow Up Save anyway.`);
+  }
+  await waitBeforeFollowUpSave(log);
+
+  for (let attempt = 1; attempt <= env.GDMS_SAVE_MAX_ATTEMPTS; attempt++) {
+    try {
+      await withPageInputBypass(page, async () => {
+        modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
+        await closeDateTimePickerWithoutClosingModal(modal);
+        await dismissTransientKendoPopups(page);
+        await scrollFollowUpSaveIntoView(page);
+        await clickBtnFollowUpSave(page, log);
+      });
+    } catch (err) {
+      if (!isPlaywrightDetachError(err)) throw err;
+      await log("warn", `Follow Up Save attempt ${attempt} — frame detached; checking CRM state.`);
+    }
+    await humanDelay(
+      env.GDMS_SAVE_RETRY_INTERVAL_MS,
+      env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
+    );
+    if (await confirmFollowUpSkipSaveSucceeded(page, log)) {
+      await log("info", "Follow Up Save succeeded (skip flow).");
+      return;
+    }
+    await log("warn", `Follow Up Save attempt ${attempt} — no success yet.`);
+    if (attempt < env.GDMS_SAVE_MAX_ATTEMPTS) await waitBeforeFollowUpSave(log);
+  }
+  await ctx.signalManualIntervention(
+    `Follow Up Save failed after ${env.GDMS_SAVE_MAX_ATTEMPTS} attempts (Today's Follow Up skip).`,
+  );
+}
+
+async function confirmFollowUpSkipSaveSucceeded(
+  page: Page,
+  log: EnquiryTransferContext["log"],
+  waitMs = 14_000,
+): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    if (await isSuccessToastVisible(page)) return true;
+    if (!(await isAnyEnquiryModalVisible(page)) && (await isOnTodaysFollowUpList(page))) {
+      await log("info", "Follow Up Save — modal closed; Today's Follow Up list visible.");
+      return true;
+    }
+    await pollDelay(350);
+  }
+  return false;
+}
+
 async function processOneTransfer(
   ctx: EnquiryTransferContext,
   detailPage: Page,
@@ -3159,21 +3822,37 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
     }
 
     if (await isAnyEnquiryModalVisible(listPage)) {
-      await log(
-        "info",
-        "Enquiry modal already open — continuing transfer from PIN / Basic Info (no double-click).",
-      );
-      let transferCompleted = false;
-      try {
-        await processOneTransfer(ctx, listPage);
-        transferCompleted = true;
-      } finally {
-        if (transferCompleted) {
-          await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, listPage, listPage);
-          await humanDelay(800, 1800);
-          await ensureListPageForPolling(listPage, log);
+      const opened = await readEnquirySourceFieldsFromModal(listPage);
+      if (opened && rowMatchesCriteria(opened.source, opened.subSource, criteria)) {
+        await log(
+          "info",
+          `Enquiry modal open — source matches (${opened.source}${opened.subSource ? ` / ${opened.subSource}` : ""}). Continuing transfer.`,
+        );
+        let transferCompleted = false;
+        try {
+          await processOneTransfer(ctx, listPage);
+          transferCompleted = true;
+        } finally {
+          if (transferCompleted) {
+            await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, listPage, listPage);
+            await humanDelay(800, 1800);
+            await ensureListPageForPolling(listPage, log);
+          }
         }
+        continue;
       }
+      if (opened) {
+        await log(
+          "warn",
+          `Enquiry modal open but source does not match (${opened.source}${opened.subSource ? ` / ${opened.subSource}` : ""}) — expected ${formatCriteriaSummary(criteria)}. Closing modal.`,
+        );
+      } else {
+        await log(
+          "warn",
+          "Enquiry modal open but Enquiry Source could not be read — closing modal to search list.",
+        );
+      }
+      await closeVisibleEnquiryModal(listPage, log);
       continue;
     }
 

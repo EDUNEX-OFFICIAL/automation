@@ -3,9 +3,16 @@ import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
 import type { AccessTokenPayload } from "@gdms/auth";
 import { verifyPassword } from "@gdms/auth";
-import { attachRedisConnectionWarnings, redis, WORKFLOW_REDIS_CHANNEL } from "./redis.js";
-import { prisma } from "./prisma.js";
 import { env } from "./config.js";
+import {
+  attachRedisConnectionWarnings,
+  redis,
+  redisConnectionOptions,
+  WORKFLOW_REDIS_CHANNEL,
+} from "./redis.js";
+import { Redis } from "ioredis";
+import { appendRunLogBuffer } from "./run-log-buffer.js";
+import { prisma } from "./prisma.js";
 import {
   SocketEvents,
   roomForDealer,
@@ -24,6 +31,11 @@ import type {
 export type IoServer = Server;
 
 let ioRef: Server | null = null;
+let workflowEventsSubscribed = false;
+
+export function isWorkflowEventsSubscribed(): boolean {
+  return workflowEventsSubscribed;
+}
 
 export function getIo(): Server {
   if (!ioRef) throw new Error("Socket.IO not initialized");
@@ -130,11 +142,39 @@ export function attachSocket(httpServer: HttpServer): Server {
     });
   });
 
-  const sub = redis.duplicate();
+  const sub = new Redis(env.REDIS_URL, redisConnectionOptions);
   attachRedisConnectionWarnings(sub, "api-subscribe");
-  void sub.subscribe(WORKFLOW_REDIS_CHANNEL, (err?: Error | null) => {
-    if (err) console.error("Redis subscribe error", err);
+
+  let subscribeDone = false;
+  const ensureSubscribed = async (): Promise<void> => {
+    if (subscribeDone) return;
+    try {
+      await sub.subscribe(WORKFLOW_REDIS_CHANNEL);
+      subscribeDone = true;
+      workflowEventsSubscribed = true;
+      console.info(`[redis:api-subscribe] listening on ${WORKFLOW_REDIS_CHANNEL}`);
+    } catch (e) {
+      workflowEventsSubscribed = false;
+      console.error("[redis:api-subscribe] subscribe failed", e);
+    }
+  };
+
+  sub.on("ready", () => {
+    void ensureSubscribed();
   });
+  sub.on("close", () => {
+    subscribeDone = false;
+    workflowEventsSubscribed = false;
+  });
+  sub.on("error", (e: Error) => {
+    subscribeDone = false;
+    workflowEventsSubscribed = false;
+    console.error("[redis:api-subscribe] connection error", e.message);
+  });
+  if (sub.status === "ready") {
+    void ensureSubscribed();
+  }
+
   sub.on("message", (_channel: string, message: string) => {
     try {
       const evt = JSON.parse(message) as {
@@ -157,6 +197,7 @@ export function attachSocket(httpServer: HttpServer): Server {
         io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.SCREENSHOT_FRAME, p);
       } else if (evt.type === SocketEvents.LOG_LINE) {
         const p = evt.payload as LogLinePayload;
+        void appendRunLogBuffer(p).catch((e) => console.error("run log buffer", e));
         if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(SocketEvents.LOG_LINE, p);
         io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.LOG_LINE, p);
       } else if (evt.type === SocketEvents.WORKFLOW_STARTED && evt.dealerId) {

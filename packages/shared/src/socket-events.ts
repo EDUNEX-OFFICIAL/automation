@@ -92,6 +92,11 @@ export type LogLinePayload = {
   ts: string;
 };
 
+/** Redis list key — automation LPUSHes; API LRANGE for Live session replay. */
+export function runLogBufferKey(runId: string): string {
+  return `run:${runId}:log_buffer`;
+}
+
 export type GdmsSessionRedirectedPayload = {
   workflowRunId: string;
   reason: "timeout" | "logout";

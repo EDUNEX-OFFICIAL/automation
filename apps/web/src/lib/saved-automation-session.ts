@@ -16,7 +16,6 @@ const IN_FLIGHT_STATUSES = new Set([
   "RUNNING",
   "PAUSED_OTP",
   "PAUSED_USER",
-  "FAILED",
 ]);
 
 type WorkflowRunSummary = { id: string; status: string; dealerId?: string };
@@ -29,13 +28,7 @@ export type WorkflowRunDetail = {
   errorMessage?: string | null;
 };
 
-const RESUMABLE_STATUSES = new Set([
-  "FAILED",
-  "PAUSED_USER",
-  "RUNNING",
-  "PAUSED_OTP",
-  "STOPPED",
-]);
+const RESUMABLE_STATUSES = new Set(["FAILED", "PAUSED_USER", "RUNNING", "PAUSED_OTP"]);
 
 function normalizeRunIdInput(raw: string): string {
   return raw.trim();
@@ -58,7 +51,7 @@ export async function loadSessionByRunId(
   const params = automationRunParamsSchema.safeParse(run.runParams);
   if (!params.success) {
     throw new Error(
-      "This session does not have valid enquiry transfer settings. Start a new run from the form instead.",
+      "This session does not have valid automation settings. Start a new enquiry transfer from the dashboard instead.",
     );
   }
 
@@ -149,8 +142,14 @@ export async function resumeSavedAutomationSession(
     apiFetch<{ active: boolean }>(`/v1/workflow-runs/${saved.runId}/session-active`, { token }),
   ]);
 
-  if (saved.operation !== "enquiry_transfer") {
-    throw new Error("Only enquiry transfer sessions can be started from a session ID.");
+  const resumePath =
+    saved.operation === "follow_up_skip"
+      ? "resume-session"
+      : saved.operation === "enquiry_transfer"
+        ? "resume-session"
+        : null;
+  if (!resumePath) {
+    throw new Error("This operation cannot be resumed from a session ID.");
   }
 
   if (run.status === "COMPLETED") {

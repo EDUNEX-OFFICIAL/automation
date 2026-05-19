@@ -1,0 +1,11 @@
+# Option B: expose Postgres/Redis on loopback only for SSH tunnel from a dev PC.
+# Use with prod overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.tunnel.yml up -d postgres redis api web ai
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:54322:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6380:6379"

@@ -96,6 +96,15 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
   if (lower.includes("live preview is no longer active")) {
     return "The live browser preview has already ended. Start a new GDMS login run, or use Stop only while the preview is still active.";
   }
+  if (lower.includes("still queued")) {
+    return "This run is still in the queue. Wait a few seconds, or press Stop to cancel it.";
+  }
+  if (lower.includes("cannot be paused")) {
+    return "Pause is only available while automation is actively running.";
+  }
+  if (lower.includes("not paused")) {
+    return "Resume is only available when the run is paused or failed.";
+  }
   if (lower.includes("already running for this dealer")) {
     return "Another automation is still marked active. Open Live session and press Stop on that run, then try START again.";
   }

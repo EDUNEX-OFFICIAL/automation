@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/
 WORKDIR /repo
 
 FROM base AS build
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/worker ./apps/worker
 RUN pnpm install --no-frozen-lockfile

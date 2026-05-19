@@ -8,6 +8,7 @@ import {
   parseAutomationLogLine,
   type AutomationLogCategory,
 } from "@/lib/automation-log-present";
+import { runStatusLabel, userFacingLogMessage } from "@/lib/automation-log-user";
 import { cn } from "@/lib/utils";
 
 type LogEntry = { level: string; message: string; ts: string };
@@ -28,6 +29,7 @@ export type LiveSessionLogPanelProps = {
   apiCurrentStep: string | null;
   runStatus: string | null | undefined;
   prominentError: string | null | undefined;
+  onClearLogs?: () => void;
 };
 
 export function LiveSessionLogPanel({
@@ -36,6 +38,7 @@ export function LiveSessionLogPanel({
   apiCurrentStep,
   runStatus,
   prominentError,
+  onClearLogs,
 }: LiveSessionLogPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
@@ -70,15 +73,29 @@ export function LiveSessionLogPanel({
           <span className="font-mono text-zinc-700">* Verification</span> mean mandatory (
           <span className="font-mono">*</span>, not the word &quot;Star&quot;).
         </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 w-fit text-xs"
-          onClick={() => void copyLogs()}
-        >
-          {copied ? "Copied to clipboard" : "Copy full log"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-fit text-xs"
+            onClick={() => void copyLogs()}
+          >
+            {copied ? "Copied" : "Copy full log"}
+          </Button>
+          {onClearLogs ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-fit text-xs"
+              disabled={logs.length === 0}
+              onClick={onClearLogs}
+            >
+              Clear log
+            </Button>
+          ) : null}
+        </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 text-sm">
         {runStatus ? (
@@ -86,7 +103,7 @@ export function LiveSessionLogPanel({
             <div className="grid gap-2 sm:grid-cols-1">
               <p>
                 <span className="font-semibold text-zinc-700">Run status:</span>{" "}
-                <span className="font-mono">{runStatus}</span>
+                <span>{runStatusLabel(runStatus)}</span>
               </p>
               <p>
                 <span className="font-semibold text-zinc-700">Workflow step (API):</span>{" "}
@@ -139,8 +156,8 @@ export function LiveSessionLogPanel({
                         {parsed.badge}
                       </span>
                       <span className="font-mono text-[10px] uppercase text-zinc-500">{l.level}</span>
-                      <span className="min-w-0 flex-[1_1_100%] break-words text-zinc-900 sm:flex-[unset]">
-                        {l.message}
+                      <span className="min-w-0 flex-[1_1_100%] break-words font-medium text-zinc-900 sm:flex-[unset]">
+                        {userFacingLogMessage(l.message)}
                       </span>
                     </div>
                     {parsed.hint ? (

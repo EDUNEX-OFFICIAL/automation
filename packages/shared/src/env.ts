@@ -44,6 +44,11 @@ const apiEnvSchemaBase = z.object({
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).optional(),
   /** HMIL GDMS entry URL — used when resuming workflows from the API (same as worker/automation). */
   GDMS_BASE_URL: z.string().url().optional(),
+  GDMS_REMOTE_VIEW: z
+    .string()
+    .optional()
+    .transform((s) => s === "true" || s === "1"),
+  GDMS_VNC_PASSWORD: z.string().min(4).optional(),
 });
 
 export const apiEnvSchema = apiEnvSchemaBase.transform((d) => ({
@@ -74,6 +79,8 @@ export const workerEnvSchema = z.object({
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).default("dev-internal-secret-change-me"),
   AI_INTERNAL_SECRET: z.string().min(16).default("dev-ai-secret-change-me"),
   GDMS_BASE_URL: z.string().url().optional(),
+  /** Post-login home (selectHome.dms) — session restore / skip OTP checks. */
+  GDMS_HOME_URL: z.string().url().optional(),
   GDMS_INQUIRY_LIST_URL: z.string().url().optional(),
   GDMS_WORKFLOW_URL: z.string().url().optional(),
 });
@@ -87,6 +94,7 @@ export const automationEnvSchema = z.object({
   REDIS_URL: z.string().min(1),
   SESSIONS_DIR: z.string().default("./data/sessions"),
   GDMS_BASE_URL: z.string().url(),
+  GDMS_HOME_URL: z.string().url().optional(),
   WORKFLOW_ENGINE_VERSION: z.string().default("1"),
   DISPLAY: z.string().optional(),
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).default("dev-internal-secret-change-me"),
@@ -95,6 +103,17 @@ export const automationEnvSchema = z.object({
     .string()
     .default("true")
     .transform((s) => s === "true" || s === "1"),
+  /** JPEG frames to Live session while headed (Docker / Ubuntu — no local desktop window). */
+  GDMS_PREVIEW_STREAM: z
+    .string()
+    .optional()
+    .transform((s) => s === "true" || s === "1"),
+  /** noVNC: user opens GDMS Chromium in a new browser tab/window (zero PC install). */
+  GDMS_REMOTE_VIEW: z
+    .string()
+    .optional()
+    .transform((s) => s === "true" || s === "1"),
+  GDMS_VNC_PASSWORD: z.string().min(4).optional(),
   /**
    * UI pacing scale: 1.0 = baseline, ~0.65 = faster but even (use with pause tiers in human-delay).
    */

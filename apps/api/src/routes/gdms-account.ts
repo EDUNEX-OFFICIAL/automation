@@ -11,7 +11,9 @@ import {
   canEditGdmsSecrets,
   canAccessDealer,
 } from "@gdms/auth";
+import { looksLikeGdmsCookieToken, parseGdmsBootstrapInput } from "@gdms/shared";
 import { env } from "../config.js";
+import { setDealerGdmsBootstrapCookies } from "../redis.js";
 
 type GdmsAccountSummary = {
   dealerId: string;
@@ -121,5 +123,34 @@ export async function registerGdmsRoutes(app: FastifyInstance): Promise<void> {
     if (!dealer) return reply.code(404).send({ error: "Dealer not found" });
     const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId } });
     return summarizeGdmsAccount(dealer, acc);
+  });
+
+  app.put("/v1/gdms/login-token", { preHandler: authPreHandler }, async (req, reply) => {
+    const body = z
+      .object({
+        dealerId: z.string().min(1),
+        token: z.string().min(20),
+      })
+      .parse(req.body);
+    if (!canAccessDealer(req.user!.dealerId, body.dealerId, req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    if (!looksLikeGdmsCookieToken(body.token)) {
+      return reply.code(400).send({
+        error:
+          "This looks like a Session ID (Run ID), not a GDMS cookie. Use Start from saved session for Run ID, or paste BNES_JSESSIONID from Chrome DevTools.",
+      });
+    }
+    let cookies;
+    try {
+      cookies = parseGdmsBootstrapInput(body.token);
+    } catch {
+      return reply.code(400).send({ error: "Invalid cookie token or JSON." });
+    }
+    if (cookies.length === 0) {
+      return reply.code(400).send({ error: "No cookies parsed from token." });
+    }
+    await setDealerGdmsBootstrapCookies(body.dealerId, JSON.stringify(cookies));
+    return { ok: true, message: "GDMS login token saved for this dealer." };
   });
 }

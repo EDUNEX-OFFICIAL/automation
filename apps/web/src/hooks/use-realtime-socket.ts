@@ -5,8 +5,9 @@ import { io, type Socket } from "socket.io-client";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveStore } from "@/stores/live-store";
 import { useLeadsStore } from "@/stores/leads-store";
-import { SocketEvents } from "@gdms/shared";
-import { getApiUrl, getSocketIoSettings } from "@/lib/api";
+import { SocketEvents, automationRunParamsSchema } from "@gdms/shared";
+import { apiFetch, getApiUrl, getSocketIoSettings } from "@/lib/api";
+import type { WorkflowRunDetail } from "@/lib/saved-automation-session";
 import { useAutomationSessionStore } from "@/stores/automation-session-store";
 
 export function useRealtimeSocket(): void {
@@ -67,16 +68,49 @@ export function useRealtimeSocket(): void {
     socketRef.current = socket;
 
     socket.on(SocketEvents.OTP_REQUIRED, (p: { workflowRunId: string }) => {
+      const live = useLiveStore.getState();
+      live.setRun(p.workflowRunId);
       storeRef.current.openOtp(p.workflowRunId);
+      void (async () => {
+        try {
+          const run = await apiFetch<WorkflowRunDetail>(
+            `/v1/workflow-runs/${encodeURIComponent(p.workflowRunId)}`,
+            { token: token! },
+          );
+          const params = automationRunParamsSchema.safeParse(run.runParams);
+          if (params.success) {
+            useAutomationSessionStore.getState().save({
+              runId: run.id,
+              dealerId: run.dealerId,
+              operation: params.data.operation,
+              sources: params.data.sources,
+              subSources: params.data.subSources,
+            });
+          }
+        } catch {
+          /* run poll optional */
+        }
+      })();
     });
-    socket.on(SocketEvents.STEP_COMPLETED, (p: { label: string }) => {
+    socket.on(SocketEvents.STEP_COMPLETED, (p: { workflowRunId?: string; label: string }) => {
+      const active = useLiveStore.getState().runId;
+      if (active && p.workflowRunId && p.workflowRunId !== active) return;
       storeRef.current.setLastStep(p.label);
     });
-    socket.on(SocketEvents.SCREENSHOT_FRAME, (p: { imageBase64: string }) => {
-      storeRef.current.setFrame(p.imageBase64);
-    });
-    socket.on(SocketEvents.LOG_LINE, (p: { level: string; message: string; ts: string }) => {
-      storeRef.current.pushLog(p);
+    socket.on(
+      SocketEvents.SCREENSHOT_FRAME,
+      (p: { workflowRunId?: string; imageBase64: string }) => {
+        const active = useLiveStore.getState().runId;
+        if (active && p.workflowRunId && p.workflowRunId !== active) return;
+        storeRef.current.setFrame(p.imageBase64);
+      },
+    );
+    socket.on(
+      SocketEvents.LOG_LINE,
+      (p: { workflowRunId?: string; level: string; message: string; ts: string }) => {
+        const active = useLiveStore.getState().runId;
+        if (active && p.workflowRunId && p.workflowRunId !== active) return;
+        storeRef.current.pushLog(p);
       const m = p.message.toLowerCase();
       if (
         m.includes("gdms dashboard is ready") ||
@@ -106,6 +140,21 @@ export function useRealtimeSocket(): void {
         ts: new Date().toISOString(),
       });
     });
+    socket.on(
+      SocketEvents.CONTROL_ACK,
+      (p: { workflowRunId?: string; action?: string; ok?: boolean }) => {
+        if (p?.workflowRunId && p.workflowRunId !== useLiveStore.getState().runId) return;
+        if (p?.ok && p.action) {
+          const actionLabel =
+            p.action === "pause" ? "Pause" : p.action === "resume" ? "Resume" : "Stop";
+          storeRef.current.pushLog({
+            level: "info",
+            message: `${actionLabel} confirmed by server.`,
+            ts: new Date().toISOString(),
+          });
+        }
+      },
+    );
     socket.on(SocketEvents.WORKFLOW_COMPLETED, (p: { workflowRunId?: string }) => {
       if (p?.workflowRunId && p.workflowRunId === useLiveStore.getState().runId) {
         storeRef.current.setWorkflowDone(true);

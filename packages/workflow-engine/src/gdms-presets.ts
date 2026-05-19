@@ -126,6 +126,15 @@ export function enquiryTransferWorkflow(): WorkflowDefinition {
   };
 }
 
+/** Placeholder — Today's Follow Up skip logic runs in automation-service after login. */
+export function followUpSkipWorkflow(): WorkflowDefinition {
+  return {
+    version: "1",
+    name: "follow_up_skip",
+    steps: [],
+  };
+}
+
 export function inquiryFetchWorkflow(listUrl: string): WorkflowDefinition {
   return {
     version: "1",

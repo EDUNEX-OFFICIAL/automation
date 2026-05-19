@@ -23,6 +23,22 @@ export function isInputGuardEnabled(): boolean {
 }
 
 /** tsx `keepNames` + Playwright evaluate — define __name in every document before other scripts. */
+/** Log background XHR/fetch failures without failing the workflow. */
+export function attachNonFatalNetworkLogging(
+  context: BrowserContext,
+  onWarn?: (message: string) => void,
+): void {
+  const warn = onWarn ?? ((message: string) => console.warn(message));
+  context.on("requestfailed", (req) => {
+    const url = req.url();
+    const failure = req.failure()?.errorText ?? "failed";
+    const type = req.resourceType();
+    if (type === "xhr" || type === "fetch" || /\.dms|hmil\.net/i.test(url)) {
+      warn(`Non-fatal request failure: ${type} ${url} (${failure})`);
+    }
+  });
+}
+
 export async function installAutomationBrowserScripts(context: BrowserContext): Promise<void> {
   await context.addInitScript(resolveSidebarInpageScript());
 

@@ -1,19 +1,23 @@
-import fs from "node:fs";
 import path from "node:path";
 import { Redis } from "ioredis";
-import { chromium } from "playwright";
 import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
+import { displayForOperation } from "@gdms/shared";
+import { launchGdmsPersistentContext } from "./browser-profile.js";
 import {
+  closeActiveSessionsForDealer,
   getActiveSession,
+  browserProfileKeyForOperation,
   registerActiveSession,
 } from "./active-sessions.js";
 import { runEnquiryTransfer } from "./enquiry-transfer.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import {
   attachInputGuardListeners,
+  attachNonFatalNetworkLogging,
   installAutomationBrowserScripts,
 } from "./automation-browser-setup.js";
+import { resolveGdmsHomeUrl } from "@gdms/shared";
 import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
 import {
   isGdmsDashboardReady,
@@ -22,6 +26,8 @@ import {
   redisControlKey,
   waitForGdmsDashboardReady,
 } from "./gdms-session-watch.js";
+import { assertEnquiryTransferBrowserMode } from "./browser-context.js";
+import { createPreviewStream } from "./preview-stream.js";
 import { env } from "./config.js";
 import type { ExecutePayload } from "./runner.js";
 import { retryEnquiryTransfer } from "./retry-enquiry-transfer.js";
@@ -58,11 +64,7 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     return;
   }
 
-  if (!env.PLAYWRIGHT_HEADED) {
-    throw new Error(
-      "Enquiry transfer requires PLAYWRIGHT_HEADED=true (visible browser only — set it in apps/automation-service/.env and restart pnpm dev).",
-    );
-  }
+  assertEnquiryTransferBrowserMode();
 
   const redisClient = new Redis(env.REDIS_URL);
   const { runId, dealerId } = payload;
@@ -77,16 +79,17 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
   };
 
   const sessionDir = path.join(env.SESSIONS_DIR, dealerId);
-  fs.mkdirSync(sessionDir, { recursive: true });
-
-  const context = await chromium.launchPersistentContext(sessionDir, {
-    headless: false,
-    viewport: { width: 1280, height: 800 },
+  await closeActiveSessionsForDealer(dealerId);
+  const context = await launchGdmsPersistentContext(sessionDir, {
+    display: displayForOperation(payload.operation),
   });
 
   await installAutomationBrowserScripts(context);
+  attachNonFatalNetworkLogging(context, (message) => {
+    void log("warn", message);
+  });
 
-  if (await applyGdmsBootstrapCookies(context, sessionDir)) {
+  if (await applyGdmsBootstrapCookies(context, sessionDir, payload.dealerId)) {
     await log("info", "GDMS bootstrap cookies applied from env.");
   }
 
@@ -98,15 +101,25 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     "info",
     "GDMS browser input locked during automation — use Stop on Live session to interrupt.",
   );
-  const captureFrame = async (): Promise<void> => {};
+
+  const preview = createPreviewStream({
+    runId,
+    dealerId,
+    getPage: () => page,
+    publish: (type, dId, frame) => publish(redisClient, type, dId, frame),
+    isStopped: () => isStopped(redisClient, runId),
+    operation: payload.operation,
+  });
+  preview.startLoop();
   registerActiveSession({
     runId,
     dealerId,
+    profileKey: browserProfileKeyForOperation(dealerId, payload.operation),
     page,
     context,
     payload,
-    captureFrame,
-    stopScreenshots: () => {},
+    captureFrame: preview.captureFrame,
+    stopScreenshots: preview.stopLoop,
   });
 
   try {
@@ -132,15 +145,16 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     }
 
     if (!onList && !(await isGdmsDashboardReady(page))) {
-      const homeUrl = env.GDMS_BASE_URL;
-      if (homeUrl && homeUrl !== baseUrl) {
+      const homeUrl = resolveGdmsHomeUrl(env.GDMS_HOME_URL);
+      if (homeUrl !== baseUrl) {
         await page.goto(homeUrl, { timeout: 60_000, waitUntil: "domcontentloaded" });
       }
     }
 
     if (!(await isGdmsDashboardReady(page))) {
+      await preview.captureFrame();
       throw new Error(
-        "GDMS is not logged in on this device profile. Log in once from the dashboard (OTP), then use Resume saved session again.",
+        "GDMS is not logged in on the server browser profile. Use Dashboard → Start fresh (new run), complete OTP when prompted, then use Resume only after GDMS home appears in the Live preview below.",
       );
     }
 

@@ -50,11 +50,13 @@ services:
       AI_SERVICE_URL: http://ai:4200
       AI_INTERNAL_SECRET: dev-ai-secret-change-me
       GDMS_BASE_URL: https://ndms.hmil.net/cmm/cmmi/selectLoginMain.dms
-
     depends_on:
-      - postgres
-      - redis
-      - automation
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      automation:
+        condition: service_healthy
 
   automation:
     build:
@@ -75,6 +77,16 @@ services:
     depends_on:
       - postgres
       - redis
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:4101/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
 
   ai:
     build:
