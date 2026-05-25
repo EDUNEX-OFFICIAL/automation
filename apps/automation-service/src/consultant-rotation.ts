@@ -2,6 +2,7 @@ import type { Redis } from "ioredis";
 
 export const SALES_CONSULTANTS = [
   "Md Nafees Hussain",
+  "Rakesh Kumar Singh",
   "Priyali Singh",
   "Amit Kumar",
 ] as const;
