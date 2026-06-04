@@ -35,6 +35,7 @@ export default function UsersPage() {
   const router = useRouter();
   const token = useAuthStore((s) => s.accessToken);
   const role = useAuthStore((s) => s.user?.role);
+  const currentUserId = useAuthStore((s) => s.user?.id);
   const syncUserFromApi = useAuthStore((s) => s.syncUserFromApi);
   const [rows, setRows] = useState<Row[]>([]);
   const [username, setUsername] = useState("");
@@ -191,6 +192,35 @@ export default function UsersPage() {
       await refresh();
     } catch (e) {
       setErr(toUserMessage(e));
+    }
+  }
+
+  function canManageRow(u: Row): boolean {
+    return (
+      ((isAdmin || isTl) && u.role === "SALES_CONSULTANT") ||
+      (isAdmin && u.role === "TEAM_LEADER")
+    );
+  }
+
+  async function deleteUser(u: Row): Promise<void> {
+    if (!token || u.id === currentUserId) return;
+    const label = u.displayName?.trim() || u.username;
+    if (
+      !window.confirm(
+        `Delete ${label} permanently? Their GDMS credentials and notifications will be removed. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await apiFetch(`/v1/users/${u.id}`, { method: "DELETE", token });
+      await refresh();
+    } catch (e) {
+      setErr(toUserMessage(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -385,13 +415,20 @@ export default function UsersPage() {
                     <Button size="sm" variant="outline" asChild>
                       <Link href={`/profile?userId=${encodeURIComponent(u.id)}`}>Edit profile</Link>
                     </Button>
-                    {(isAdmin || isTl) && u.role === "SALES_CONSULTANT" ? (
+                    {canManageRow(u) ? (
                       <Button size="sm" variant="outline" onClick={() => void toggleActive(u.id, u.isActive)}>
                         {u.isActive ? "Disable" : "Enable"}
                       </Button>
-                    ) : isAdmin && u.role === "TEAM_LEADER" ? (
-                      <Button size="sm" variant="outline" onClick={() => void toggleActive(u.id, u.isActive)}>
-                        {u.isActive ? "Disable" : "Enable"}
+                    ) : null}
+                    {canManageRow(u) && u.id !== currentUserId ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-red-300 text-red-900 hover:bg-red-50 dark:border-red-700 dark:text-red-200 dark:hover:bg-red-950/40"
+                        disabled={busy}
+                        onClick={() => void deleteUser(u)}
+                      >
+                        Delete
                       </Button>
                     ) : null}
                   </div>

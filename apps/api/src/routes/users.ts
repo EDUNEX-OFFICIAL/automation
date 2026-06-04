@@ -7,6 +7,7 @@ import {
   canManageDealerUsers,
   canAccessTeamUsersApi,
   canAccessDealer,
+  canDeleteTeamUser,
   rolesCreatableBy,
 } from "@gdms/auth";
 import type { TeamType, UserRole } from "@gdms/database";
@@ -251,6 +252,53 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       payload: body,
     });
     return updated;
+  });
+
+  app.delete("/v1/users/:id", { preHandler: authPreHandler }, async (req, reply) => {
+    if (!canAccessTeamUsersApi(req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    const { id } = req.params as { id: string };
+    const target = await prisma.user.findUnique({ where: { id } });
+    if (!target) return reply.code(404).send({ error: "Not found" });
+
+    const actor = req.user!;
+    if (
+      target.dealerId &&
+      !canAccessDealer(actor.dealerId, target.dealerId, actor.role)
+    ) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    if (
+      !canDeleteTeamUser(
+        { sub: actor.sub, role: actor.role, dealerId: actor.dealerId },
+        {
+          id: target.id,
+          role: target.role,
+          dealerId: target.dealerId,
+          reportsToUserId: target.reportsToUserId,
+        },
+      )
+    ) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.notification.deleteMany({ where: { userId: id } });
+      await tx.user.delete({ where: { id } });
+    });
+
+    await writeAuditEvent({
+      dealerId: target.dealerId,
+      actorUserId: actor.sub,
+      action: "user_deleted",
+      entityType: "User",
+      entityId: id,
+      payload: { role: target.role, username: target.username },
+    });
+
+    return { ok: true };
   });
 
   app.post("/v1/users/bulk", { preHandler: authPreHandler }, async (req, reply) => {
