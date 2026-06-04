@@ -39,7 +39,7 @@ import type { GdmsAccountSummary } from "@/lib/gdms-account";
 import { persistAutomationRun, resumeSavedAutomationSession } from "@/lib/saved-automation-session";
 import { toUserMessage } from "@/lib/user-messages";
 import { NativeSelect } from "@/components/ui/native-select";
-import { TEAM_TYPE_LABELS, type TeamType } from "@/lib/roles";
+import { TEAM_TYPE_LABELS, canEditScheduleSettings, type TeamType } from "@/lib/roles";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   useAutomationSessionStore,
@@ -151,7 +151,7 @@ export default function DashboardPage() {
   }, [token, dealerId]);
 
   useEffect(() => {
-    if (!token || !dealerId) return;
+    if (!token || !dealerId || !canEditScheduleSettings(user?.role)) return;
     void Promise.all([
       apiFetch<{ followUpSkipEnabled: boolean; followUpSkipStartTime: string | null }>(
         `/v1/dealers/${encodeURIComponent(dealerId)}/automation-settings`,
@@ -178,7 +178,7 @@ export default function DashboardPage() {
         setFollowUpSkipStartTime(null);
         setFollowUpSkipInFlight(false);
       });
-  }, [token, dealerId]);
+  }, [token, dealerId, user?.role]);
 
   const selectedGdms = myGdms;
 
@@ -372,6 +372,11 @@ export default function DashboardPage() {
 
   if (!token) return null;
 
+  const showFollowUpSkip = canEditScheduleSettings(user?.role);
+  const dealerName =
+    dealers.find((d) => d.id === dealerId)?.name ?? dealers[0]?.name ?? null;
+  const showDealerPicker = dealers.length > 1;
+
   return (
     <>
       <PageHeader title="Dashboard" eyebrow="Operations" />
@@ -389,6 +394,7 @@ export default function DashboardPage() {
             )
           }
         />
+        {showFollowUpSkip ? (
         <StatCard
           label="Follow up skip"
           icon={CalendarClock}
@@ -401,6 +407,7 @@ export default function DashboardPage() {
             )
           }
         />
+        ) : null}
         <StatCard
           label="Enquiry transfer"
           icon={Zap}
@@ -464,20 +471,29 @@ export default function DashboardPage() {
         <Card>
           <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
             <div className="min-w-[12rem] flex-1 space-y-1.5">
-              <label htmlFor="dealer-select" className="text-sm font-medium text-foreground">
-                Dealer
-              </label>
-              <NativeSelect
-                id="dealer-select"
-                value={dealerId}
-                onChange={(e) => setDealerId(e.target.value)}
-              >
-                {dealers.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </NativeSelect>
+              {showDealerPicker ? (
+                <>
+                  <label htmlFor="dealer-select" className="text-sm font-medium text-foreground">
+                    Dealer
+                  </label>
+                  <NativeSelect
+                    id="dealer-select"
+                    value={dealerId}
+                    onChange={(e) => setDealerId(e.target.value)}
+                  >
+                    {dealers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </>
+              ) : dealerName ? (
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Dealer</p>
+                  <p className="text-base font-semibold text-foreground">{dealerName}</p>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-6">
               {selectedGdms?.configured ? (
@@ -523,6 +539,7 @@ export default function DashboardPage() {
         </DialogContent>
       </Dialog>
 
+      {showFollowUpSkip ? (
       <Card>
         <CardHeader>
           <CardTitle>Follow up skip (scheduled)</CardTitle>
@@ -555,6 +572,7 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         {canRunEnquiryTransfer ? (

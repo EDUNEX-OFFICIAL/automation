@@ -116,6 +116,9 @@ export async function registerDealerAutomationSettingsRoutes(app: FastifyInstanc
 
   app.post("/v1/dealers/:dealerId/automation-settings/run-now", { preHandler: authPreHandler }, async (req, reply) => {
     const { dealerId } = req.params as { dealerId: string };
+    if (!canEditDealerAutomationSettings(req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
     if (!canAccessDealer(req.user!.dealerId, dealerId, req.user!.role)) {
       return reply.code(403).send({ error: "Forbidden" });
     }

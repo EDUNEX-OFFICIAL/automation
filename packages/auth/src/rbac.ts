@@ -25,6 +25,26 @@ export function canManageOwnTeamScUsers(role: Role): boolean {
   return role === "TEAM_LEADER";
 }
 
+/** Permanently remove a team user (TL/SC). Cannot delete self or Super Admin. */
+export function canDeleteTeamUser(
+  actor: { sub: string; role: Role; dealerId: string | null },
+  target: { id: string; role: Role; dealerId: string | null; reportsToUserId: string | null },
+): boolean {
+  if (actor.sub === target.id) return false;
+  if (target.role === "SUPER_ADMIN") return false;
+  if (actor.role === "TEAM_LEADER") {
+    return target.role === "SALES_CONSULTANT" && target.reportsToUserId === actor.sub;
+  }
+  if (actor.role === "DEALER_ADMIN") {
+    if (!actor.dealerId || target.dealerId !== actor.dealerId) return false;
+    return target.role === "TEAM_LEADER" || target.role === "SALES_CONSULTANT";
+  }
+  if (actor.role === "SUPER_ADMIN") {
+    return true;
+  }
+  return false;
+}
+
 export function canAccessTeamUsersApi(role: Role): boolean {
   return canManageDealerUsers(role) || canManageOwnTeamScUsers(role);
 }
@@ -44,9 +64,9 @@ export function canEditTeamGdmsSecrets(role: Role): boolean {
   return role === "DEALER_ADMIN";
 }
 
-/** Dealer-wide Follow Up Skip schedule (Settings). */
+/** Dealer-wide Follow Up Skip schedule (Settings) — Team Leader and Dealer Admin only. */
 export function canEditDealerAutomationSettings(role: Role): boolean {
-  return canRunAutomation(role) || role === "DEALER_ADMIN";
+  return role === "TEAM_LEADER" || role === "DEALER_ADMIN";
 }
 
 /** Enquiry / follow-up remark rules on Settings (TL + Dealer Admin only). */
