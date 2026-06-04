@@ -373,6 +373,9 @@ export default function DashboardPage() {
   if (!token) return null;
 
   const showFollowUpSkip = canEditScheduleSettings(user?.role);
+  const dealerName =
+    dealers.find((d) => d.id === dealerId)?.name ?? dealers[0]?.name ?? null;
+  const showDealerPicker = dealers.length > 1;
 
   return (
     <>
@@ -468,20 +471,29 @@ export default function DashboardPage() {
         <Card>
           <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
             <div className="min-w-[12rem] flex-1 space-y-1.5">
-              <label htmlFor="dealer-select" className="text-sm font-medium text-foreground">
-                Dealer
-              </label>
-              <NativeSelect
-                id="dealer-select"
-                value={dealerId}
-                onChange={(e) => setDealerId(e.target.value)}
-              >
-                {dealers.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </NativeSelect>
+              {showDealerPicker ? (
+                <>
+                  <label htmlFor="dealer-select" className="text-sm font-medium text-foreground">
+                    Dealer
+                  </label>
+                  <NativeSelect
+                    id="dealer-select"
+                    value={dealerId}
+                    onChange={(e) => setDealerId(e.target.value)}
+                  >
+                    {dealers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </>
+              ) : dealerName ? (
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Dealer</p>
+                  <p className="text-base font-semibold text-foreground">{dealerName}</p>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-6">
               {selectedGdms?.configured ? (
