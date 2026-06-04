@@ -21,6 +21,7 @@ import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
 import { humanDelay } from "./human-delay.js";
 import { assertEnquiryTransferBrowserMode } from "./browser-context.js";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
+import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
 import { env } from "./config.js";
 import { detectGdmsLoginError, gdmsLoginErrorMessage } from "./gdms-login-errors.js";
 import {
@@ -367,6 +368,7 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
   let aliveLoop: ReturnType<typeof setInterval> | null = null;
   let context: BrowserContext | null = null;
   let shotLoop: ReturnType<typeof setInterval> | null = null;
+  let stopTitleRefresh: (() => void) | null = null;
   let otpResolved: string | undefined;
   let browserRetained = false;
   let page: Page | null = null;
@@ -434,6 +436,9 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
     await closeActiveSessionsForDealer(payload.dealerId, profileKey);
     context = await launchGdmsPersistentContext(sessionDir, { display: vncDisplay });
+    if (isGdmsBrowserAutomation && vncDisplay) {
+      stopTitleRefresh = startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+    }
     await log(
       "info",
       `GDMS browser for user ${payload.startedByUserId} on display ${vncDisplay} (${payload.operation}).`,
@@ -866,6 +871,8 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       clearInterval(aliveLoop);
       aliveLoop = null;
     }
+    stopTitleRefresh?.();
+    stopTitleRefresh = null;
     if (!browserRetained) {
       detachInputGuard?.();
       unregisterActiveSession(payload.runId);

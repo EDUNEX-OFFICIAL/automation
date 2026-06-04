@@ -4,6 +4,7 @@ import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
 import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
+import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
 import {
   browserProfileKeyForOperation,
   closeActiveSessionsForDealer,
@@ -82,9 +83,11 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
 
   const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
   await closeActiveSessionsForDealer(dealerId, profileKey);
+  const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
   const context = await launchGdmsPersistentContext(sessionDir, {
-    display: displayForUserOperation(payload.startedByUserId, payload.operation),
+    display: vncDisplay,
   });
+  startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (m) => void log("warn", m));

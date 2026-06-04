@@ -3,7 +3,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Kolkata
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    xvfb x11vnc novnc websockify python3-websockify fluxbox \
+    xvfb x11vnc novnc websockify python3-websockify fluxbox xdotool \
   && ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html \
   && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate

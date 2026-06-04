@@ -30,7 +30,7 @@ const fieldBase =
 
 export const inputClass = `block h-11 min-h-11 ${fieldBase}`;
 
-export const selectClass = `native-select-control block h-11 min-h-11 w-full appearance-none bg-none ${fieldBase} pr-11`;
+export const selectClass = `native-select-control block h-11 min-h-11 w-full ${fieldBase} pr-11`;
 
 export const textareaClass = `min-h-[120px] ${fieldBase} py-3 font-mono text-xs leading-relaxed`;
 
