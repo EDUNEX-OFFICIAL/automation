@@ -92,6 +92,14 @@ export type LogLinePayload = {
   ts: string;
 };
 
+/** Max log lines kept per run (Redis + Live session UI); oldest dropped automatically. */
+export const RUN_LOG_BUFFER_MAX_LINES = 500;
+
+/** Redis list key — automation LPUSHes; API LRANGE for Live session replay. */
+export function runLogBufferKey(runId: string): string {
+  return `run:${runId}:log_buffer`;
+}
+
 export type GdmsSessionRedirectedPayload = {
   workflowRunId: string;
   reason: "timeout" | "logout";

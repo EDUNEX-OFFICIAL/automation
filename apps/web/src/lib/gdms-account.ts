@@ -1,6 +1,9 @@
 export type GdmsAccountSummary = {
-  dealerId: string;
-  dealerName: string;
+  userId: string;
+  username: string;
+  role: string;
+  dealerId: string | null;
+  dealerName?: string;
   configured: boolean;
   usernameMasked?: string;
   updatedAt?: string;
@@ -17,4 +20,8 @@ export function formatGdmsSavedAt(iso?: string): string {
   } catch {
     return "—";
   }
+}
+
+export function roleLabel(role: string): string {
+  return role.replace(/_/g, " ");
 }

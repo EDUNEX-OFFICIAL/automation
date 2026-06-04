@@ -7,6 +7,7 @@ import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms
 import { getActiveSession } from "./active-sessions.js";
 
 import { runEnquiryTransfer } from "./enquiry-transfer.js";
+import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 
 import {
@@ -104,13 +105,19 @@ export async function retryEnquiryTransfer(runId: string): Promise<void> {
       await log("info", "Already on Customer Enquiry — continuing search.");
     }
 
+    const remarkConfig = await loadDealerRemarkConfig(dealerId);
     await runEnquiryTransfer({
       page,
       runId,
       dealerId,
+      startedByUserId: payload.startedByUserId,
       redis: redisClient,
       sources: payload.sources,
       subSources: payload.subSources,
+      remarkConfig: {
+        defaultEnquiryRemarkBase: remarkConfig.defaultEnquiryRemarkBase,
+        enquiryRemarkRules: remarkConfig.enquiryRemarkRules,
+      },
       log,
       shouldStop: () => isStopped(redisClient, runId),
       waitIfPaused: () => waitIfPaused(redisClient, runId),

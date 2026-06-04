@@ -1,9 +1,9 @@
 import { Redis, type RedisOptions } from "ioredis";
 import { env } from "./config.js";
-import { WORKFLOW_REDIS_CHANNEL } from "@gdms/shared";
+import { WORKFLOW_REDIS_CHANNEL, gdmsBootstrapRedisKey } from "@gdms/shared";
 
 /** BullMQ + long-lived subscribers need unbounded command retries while reconnecting. */
-const redisOptions: RedisOptions = {
+export const redisConnectionOptions: RedisOptions = {
   maxRetriesPerRequest: null,
   retryStrategy(times: number) {
     return Math.min(times * 200, 3000);
@@ -22,7 +22,7 @@ export function attachRedisConnectionWarnings(client: Redis, label: string): voi
   });
 }
 
-export const redis = new Redis(env.REDIS_URL, redisOptions);
+export const redis = new Redis(env.REDIS_URL, redisConnectionOptions);
 attachRedisConnectionWarnings(redis, "api");
 
 export { WORKFLOW_REDIS_CHANNEL };
@@ -34,7 +34,9 @@ export async function setOtpForRun(
   dealerId?: string,
   ttlSec = 86_400,
 ): Promise<void> {
+  const submittedAt = String(Date.now());
   await redis.set(`run:${runId}:otp`, otp, "EX", ttlSec);
+  await redis.set(`run:${runId}:otp_at`, submittedAt, "EX", ttlSec);
   await redis.publish(`run:${runId}:otp_ready`, "1");
   if (dealerId) {
     await redis.set(`dealer:${dealerId}:last_run_id`, runId, "EX", ttlSec);
@@ -44,6 +46,19 @@ export async function setOtpForRun(
 
 export function dealerGdmsAuthKey(dealerId: string): string {
   return `dealer:${dealerId}:gdms_authenticated`;
+}
+
+const GDMS_BOOTSTRAP_TTL_SEC = 7 * 86_400;
+
+export async function setUserGdmsBootstrapCookies(
+  userId: string,
+  cookiesJson: string,
+): Promise<void> {
+  await redis.set(gdmsBootstrapRedisKey(userId), cookiesJson, "EX", GDMS_BOOTSTRAP_TTL_SEC);
+}
+
+export async function getUserGdmsBootstrapCookies(userId: string): Promise<string | null> {
+  return redis.get(gdmsBootstrapRedisKey(userId));
 }
 
 export async function markDealerGdmsAuthenticated(dealerId: string, runId: string): Promise<void> {

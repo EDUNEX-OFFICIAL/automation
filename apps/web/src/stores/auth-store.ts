@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { clearLiveStoreOnly } from "@/lib/terminate-live-session";
+import type { TeamType } from "@/lib/roles";
 
-/** Embedded preview / iframe `localStorage` SecurityError → persist cannot attach fully; memory fallback. */
 function memoryStorage(): Storage {
   const m = new Map<string, string>();
   return {
@@ -29,7 +30,6 @@ function webLocalStorage(): Storage {
   }
 }
 
-/** Corrupt persisted JSON → persist hydration never completes → full app white screen. */
 function safeWebStorageForPersist(): Storage {
   const inner = webLocalStorage();
   return {
@@ -60,18 +60,23 @@ function safeWebStorageForPersist(): Storage {
 
 export type UserInfo = {
   id: string;
+  username: string;
   email: string;
   role: string;
   dealerId: string | null;
+  displayName?: string | null;
+  displayLabel?: string;
+  avatarUrl?: string | null;
+  teamType?: TeamType | null;
+  effectiveTeamType?: TeamType | null;
+  canRunEnquiryTransfer?: boolean;
 };
 
 type AuthState = {
   accessToken: string | null;
   user: UserInfo | null;
   setAuth: (accessToken: string, user: UserInfo) => void;
-  /** After silent refresh — same user, new access JWT */
   setAccessToken: (accessToken: string) => void;
-  /** Repair partial persisted state where token exists but user is missing. */
   syncUserFromApi: (user: UserInfo) => void;
   logout: () => void;
 };
@@ -81,16 +86,26 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       accessToken: null,
       user: null,
-      setAuth: (accessToken, user) => set({ accessToken, user }),
+      setAuth: (accessToken, user) => {
+        const prevId = useAuthStore.getState().user?.id;
+        if (prevId && prevId !== user.id) clearLiveStoreOnly();
+        set({ accessToken, user });
+      },
       setAccessToken: (accessToken) => set({ accessToken }),
-      syncUserFromApi: (user) => set({ user }),
-      logout: () => set({ accessToken: null, user: null }),
+      syncUserFromApi: (user) => {
+        const prevId = useAuthStore.getState().user?.id;
+        if (prevId && prevId !== user.id) clearLiveStoreOnly();
+        set({ user });
+      },
+      logout: () => {
+        clearLiveStoreOnly();
+        set({ accessToken: null, user: null });
+      },
     }),
     {
       name: "gdms-auth",
       storage: createJSONStorage(() => safeWebStorageForPersist()),
       partialize: (state) => ({ accessToken: state.accessToken, user: state.user }),
-      /** Late rehydrate must not overwrite live memory with an old empty snapshot; prefer current login state. */
       merge: (persisted, current) => {
         const p = persisted as Partial<Pick<AuthState, "accessToken" | "user">> | undefined;
         return {

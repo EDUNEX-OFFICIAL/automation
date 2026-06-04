@@ -12,7 +12,7 @@ import {
 } from "./gdms-dom-discovery.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import { setAutomationInputBypass } from "./automation-browser-setup.js";
-import { humanCarIconClick, humanDelay, pollDelay } from "./human-delay.js";
+import { humanCarIconClick, humanDelay, humanHoverClick, pollDelay } from "./human-delay.js";
 import { persistLastActiveRun } from "./last-active-run.js";
 
 const DEFAULT_TIMEOUT_PATTERNS = [
@@ -47,7 +47,7 @@ export function redisWatchHeartbeatKey(runId: string): string {
   return `run:${runId}:watch:heartbeat`;
 }
 
-async function touchWatchHeartbeat(redis: Redis, runId: string): Promise<void> {
+export async function touchWatchHeartbeat(redis: Redis, runId: string): Promise<void> {
   await redis.set(redisWatchHeartbeatKey(runId), String(Date.now()), "EX", 120);
 }
 
@@ -996,6 +996,320 @@ export async function clickCustomerEnquiryFlyoutMgt(
   } finally {
     await setAutomationInputBypass(page, false);
   }
+}
+
+/** Left menu tree (not the narrow car-icon flyout strip). */
+async function locatorInLeftMenuTree(loc: Locator): Promise<boolean> {
+  const box = await loc.boundingBox().catch(() => null);
+  if (!box) return false;
+  return box.x >= 55 && box.width < 400;
+}
+
+/** Today's Follow Up tree link visible (step 3 target). */
+export async function isTodaysFollowUpMenuItemVisible(page: Page): Promise<boolean> {
+  const ui = await resolveGdmsUiRoot(page);
+  const selectors = [
+    'a.menuItem[data-title*="Today\'s Follow Up"]',
+    'a.menuItem[data-title*="Todays Follow Up"]',
+    'a[data-title*="Today\'s Follow Up"]',
+  ];
+  for (const ctx of gdmsUiContexts(page, ui)) {
+    for (const sel of selectors) {
+      const link = ctx.locator(sel).first();
+      if (await link.isVisible({ timeout: 2_000 }).catch(() => false)) return true;
+    }
+    const roleLink = ctx.getByRole("link", { name: /Today'?s\s*Follow\s*Up/i }).first();
+    if (await roleLink.isVisible({ timeout: 2_000 }).catch(() => false)) return true;
+  }
+  return false;
+}
+
+/** Step 2 only: car flyout shows Booking/Retail Mgt but tree not expanded yet. */
+export async function isBookingRetailFlyoutOnlyOpen(page: Page): Promise<boolean> {
+  if (await isBookingRetailTreeExpanded(page)) return false;
+  return flyoutShowsBookingRetailMgt(page);
+}
+
+export async function flyoutShowsBookingRetailMgt(page: Page): Promise<boolean> {
+  const ui = await resolveGdmsUiRoot(page);
+  for (const ctx of [ui, page]) {
+    if (
+      await ctx
+        .getByText(/Booking\s*\/\s*Retail\s*Mgt/i)
+        .first()
+        .isVisible({ timeout: 3_000 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+  }
+  for (const frame of page.frames()) {
+    if (frame.isDetached()) continue;
+    if (
+      await frame
+        .getByText(/Booking\s*\/\s*Retail\s*Mgt/i)
+        .first()
+        .isVisible({ timeout: 800 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function waitForBookingFlyoutAfterCarClick(page: Page, maxMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await flyoutShowsBookingRetailMgt(page)) return true;
+    await pollDelay(450);
+  }
+  return false;
+}
+
+async function tryCarSidebarClickWithBookingFlyoutProof(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+  click: () => Promise<void>,
+  successLog: string,
+): Promise<boolean> {
+  try {
+    await click();
+    if (await waitForBookingFlyoutAfterCarClick(page)) {
+      await log("info", successLog);
+      return true;
+    }
+  } catch {
+    /* try next */
+  }
+  return false;
+}
+
+/** Car icon (li.nav_sal) — opens flyout with Booking/Retail Mgt (Today's Follow Up path). */
+export async function clickSalesCarSidebarIconForBooking(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+  _opts?: CarSidebarClickOpts,
+): Promise<void> {
+  clearGdmsUiRootCache(page);
+  const { ui, score } = await resolveGdmsUiRootScored(page);
+  if (score >= MIN_UI_HOME_SCORE) gdmsUiRootCache.set(page, ui);
+  await log("info", `Car sidebar (booking path): ui=${gdmsUiFrameLabel(ui)} score=${score}.`);
+
+  await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
+  await waitForSalesSidebarReady(ui, log);
+
+  const contexts: GdmsUiRoot[] = [ui];
+  for (const frame of page.frames()) {
+    if (!frame.isDetached()) contexts.push(frame);
+  }
+
+  for (const ctx of contexts) {
+    const candidates = [
+      ctx.locator(CAR_NAV_SAL_SELECTOR).first(),
+      ctx.locator(CAR_NAV_SAL_TITLE_SELECTOR).first(),
+    ];
+    for (const el of candidates) {
+      if ((await el.count().catch(() => 0)) < 1) continue;
+      if (!(await el.isVisible().catch(() => false))) continue;
+      if (/\bnav_sal_mis\b/i.test((await el.getAttribute("class").catch(() => "")) ?? "")) continue;
+      if (
+        await tryCarSidebarClickWithBookingFlyoutProof(
+          page,
+          log,
+          () => humanCarIconClick(el),
+          "Car sidebar: li.nav_sal opened Booking/Retail flyout.",
+        )
+      ) {
+        return;
+      }
+    }
+  }
+
+  throw new Error("Could not open Booking/Retail Mgt flyout from car sidebar (li.nav_sal).");
+}
+
+async function findBookingRetailFlyoutLink(ctx: GdmsUiRoot): Promise<Locator | null> {
+  const patterns = [
+    ctx.locator("a").filter({ hasText: /^Booking\s*\/\s*Retail\s*Mgt$/i }).first(),
+    ctx
+      .locator("li")
+      .filter({ hasText: /^Booking\s*\/\s*Retail\s*Mgt$/i })
+      .locator("a")
+      .first(),
+    ctx.getByRole("link", { name: /^Booking\s*\/\s*Retail\s*Mgt$/i }).first(),
+    ctx.getByText(/^Booking\s*\/\s*Retail\s*Mgt$/i).first(),
+  ];
+  for (const loc of patterns) {
+    if ((await loc.count().catch(() => 0)) < 1) continue;
+    if (!(await loc.isVisible({ timeout: 2_000 }).catch(() => false))) continue;
+    const box = await loc.boundingBox().catch(() => null);
+    if (box && box.x > 130) continue;
+    return loc;
+  }
+  return null;
+}
+
+async function clickBookingRetailFlyoutLinkOnce(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+  label: string,
+): Promise<boolean> {
+  const ui = await resolveGdmsUiRoot(page);
+  const contexts = gdmsUiContexts(page, ui);
+  for (const ctx of contexts) {
+    const link = await findBookingRetailFlyoutLink(ctx);
+    if (!link) continue;
+    await link.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
+    await humanDelay(250, 600);
+    try {
+      await humanHoverClick(link);
+    } catch {
+      await link.click({ timeout: 30_000, force: true });
+    }
+    await log("info", label);
+    return true;
+  }
+  return false;
+}
+
+export async function clickBookingRetailFlyoutMgt(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+): Promise<void> {
+  await setAutomationInputBypass(page, true);
+  try {
+    const clicked = await clickBookingRetailFlyoutLinkOnce(
+      page,
+      log,
+      "Clicked Booking/Retail Mgt flyout (single click).",
+    );
+    if (!clicked) {
+      throw new Error("Booking/Retail Mgt flyout link not found");
+    }
+    await humanDelay(700, 1_400);
+    if (await isTodaysFollowUpMenuItemVisible(page)) {
+      await log("info", "Today's Follow Up visible in menu tree after Booking/Retail Mgt.");
+    } else if (await isBookingRetailTreeExpanded(page)) {
+      await log("info", "Booking/Retail menu tree expanded.");
+    }
+  } finally {
+    await setAutomationInputBypass(page, false);
+  }
+}
+
+export async function isBookingRetailTreeExpanded(page: Page): Promise<boolean> {
+  if (await isTodaysFollowUpMenuItemVisible(page)) return true;
+  const ui = await resolveGdmsUiRoot(page);
+  for (const ctx of gdmsUiContexts(page, ui)) {
+    const menuItems = ctx.locator("a.menuItem");
+    const n = await menuItems.count().catch(() => 0);
+    let inTree = 0;
+    for (let i = 0; i < Math.min(n, 50); i++) {
+      const item = menuItems.nth(i);
+      if (!(await item.isVisible({ timeout: 200 }).catch(() => false))) continue;
+      if (await locatorInLeftMenuTree(item)) inTree += 1;
+    }
+    if (inTree >= 3) return true;
+  }
+  return false;
+}
+
+export async function waitForBookingRetailTreeExpanded(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+  maxMs = 60_000,
+): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await isBookingRetailTreeExpanded(page)) {
+      await log("info", "Booking/Retail menu tree expanded.");
+      return;
+    }
+    await pollDelay(500);
+  }
+  throw new Error("Booking/Retail menu tree did not expand after Booking/Retail Mgt");
+}
+
+export async function clickTodaysFollowUpTreeItem(
+  page: Page,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+): Promise<void> {
+  const ui = await resolveGdmsUiRoot(page);
+  const contexts: GdmsUiRoot[] = [ui, page];
+  for (const frame of page.frames()) {
+    if (!frame.isDetached()) contexts.push(frame);
+  }
+
+  const treeSelectors = [
+    'a.menuItem[data-title*="Today\'s Follow Up"]',
+    'a.menuItem[data-title*="Todays Follow Up"]',
+    'a[data-title*="Today\'s Follow Up"]',
+    'a[data-title*="Todays Follow Up"]',
+    'a[href*="TodaysFollowUp" i]',
+    'a[href*="todaysFollowUp" i]',
+    'a[href*="FollowUp" i]',
+  ];
+
+  for (const ctx of contexts) {
+    const byText = ctx.getByText(/^Today'?s\s*Follow\s*Up$/i).first();
+    if (await byText.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await byText.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+      await humanDelay(300, 700);
+      try {
+        await humanHoverClick(byText);
+      } catch {
+        await byText.click({ timeout: 9_000, force: true });
+      }
+      await log("info", "Clicked Today's Follow Up (text match).");
+      await humanDelay(800, 1500);
+      return;
+    }
+  }
+
+  for (const ctx of contexts) {
+    for (const sel of treeSelectors) {
+      const link = ctx.locator(sel).first();
+      if ((await link.count().catch(() => 0)) < 1) continue;
+      if (!(await link.isVisible({ timeout: 2_000 }).catch(() => false))) continue;
+      await link.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+      await humanDelay(300, 700);
+      try {
+        await link.click({ timeout: 8_000, force: true });
+      } catch {
+        await link.evaluate((el) => (el as HTMLElement).click());
+      }
+      await log("info", `Clicked Today's Follow Up tree item (${sel}).`);
+      await humanDelay(800, 1500);
+      return;
+    }
+  }
+
+  for (const ctx of contexts) {
+    const link = ctx.getByRole("link", { name: /Today'?s\s*Follow\s*Up/i }).first();
+    if ((await link.count().catch(() => 0)) < 1) continue;
+    await link.click({ timeout: 9_000, force: true });
+    await log("info", "Clicked Today's Follow Up tree link (role fallback).");
+    return;
+  }
+
+  throw new Error("Today's Follow Up tree item not found in menu");
+}
+
+export async function isOnTodaysFollowUpList(page: Page): Promise<boolean> {
+  const contexts: GdmsUiRoot[] = [page];
+  const ui = await resolveGdmsUiRoot(page);
+  contexts.push(ui);
+  for (const frame of page.frames()) {
+    if (!frame.isDetached()) contexts.push(frame);
+  }
+  for (const ctx of contexts) {
+    const btnSearch = ctx.locator("#btnSearch, button.btn_search.k-button").first();
+    if (await btnSearch.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function clickLogoutLocator(page: Page, locator: Locator): Promise<boolean> {

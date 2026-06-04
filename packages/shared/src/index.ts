@@ -18,8 +18,16 @@ export {
   type VoiceSessionSignalPayload,
   type ScreenshotFramePayload,
   type LogLinePayload,
+  runLogBufferKey,
+  RUN_LOG_BUFFER_MAX_LINES,
   type GdmsSessionRedirectedPayload,
   type ControlAckPayload,
 } from "./socket-events.js";
 export * from "./call-state-machine.js";
 export * from "./automation-options.js";
+export * from "./dealer-automation-settings.js";
+export * from "./automation-remarks.js";
+export * from "./gdms-vnc-workspaces.js";
+export * from "./gdms-bootstrap.js";
+export * from "./gdms-urls.js";
+export * from "./run-metrics.js";

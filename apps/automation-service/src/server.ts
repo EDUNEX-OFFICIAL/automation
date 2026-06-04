@@ -1,9 +1,12 @@
 import Fastify from "fastify";
 import { z } from "zod";
 import { env } from "./config.js";
-import { hasActiveSession } from "./active-sessions.js";
+import { forceStopSession, hasActiveSession } from "./active-sessions.js";
+import { notifyOtpWake } from "./otp-wake.js";
 import { resumeEnquiryTransfer } from "./resume-enquiry-transfer.js";
+import { resumeFollowUpSkip } from "./resume-follow-up-skip.js";
 import { retryEnquiryTransfer } from "./retry-enquiry-transfer.js";
+import { retryFollowUpSkip } from "./retry-follow-up-skip.js";
 import { runWorkflow, type ExecutePayload } from "./runner.js";
 import type { WorkflowDefinition } from "@gdms/workflow-engine";
 import { ENABLED_AUTOMATION_OPERATIONS, AUTOMATION_SOURCES } from "@gdms/shared";
@@ -13,12 +16,13 @@ const workflowDefSchema = z.custom<WorkflowDefinition>();
 const bodySchema = z.object({
   runId: z.string(),
   dealerId: z.string(),
+  startedByUserId: z.string(),
   gdmsUsername: z.string(),
   gdmsPassword: z.string(),
   loginWorkflow: workflowDefSchema,
   operationWorkflow: workflowDefSchema,
   operation: z.enum(ENABLED_AUTOMATION_OPERATIONS),
-  sources: z.array(z.enum(AUTOMATION_SOURCES)).min(1),
+  sources: z.array(z.enum(AUTOMATION_SOURCES)).default([]),
   subSources: z
     .object({
       Digital: z.array(z.string().min(1)).optional(),
@@ -28,6 +32,14 @@ const bodySchema = z.object({
   /** @deprecated legacy single-workflow payloads */
   workflow: workflowDefSchema.optional(),
   kind: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.operation !== "follow_up_skip" && data.sources.length < 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "At least one source is required",
+      path: ["sources"],
+    });
+  }
 });
 
 async function main(): Promise<void> {
@@ -55,6 +67,16 @@ async function main(): Promise<void> {
     return reply.code(202).send({ accepted: true });
   });
 
+  app.post("/internal/resume-follow-up-skip", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    const body = bodySchema.parse(req.body) as ExecutePayload;
+    void resumeFollowUpSkip(body).catch((err) => app.log.error(err));
+    return reply.code(202).send({ accepted: true });
+  });
+
   app.post("/internal/retry-enquiry-transfer", async (req, reply) => {
     const hdr = req.headers["x-internal-secret"];
     if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
@@ -70,6 +92,31 @@ async function main(): Promise<void> {
     return reply.code(202).send({ accepted: true });
   });
 
+  app.post("/internal/retry-follow-up-skip", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    const { runId } = z.object({ runId: z.string() }).parse(req.body);
+    if (!hasActiveSession(runId)) {
+      return reply.code(409).send({
+        error: "No active browser session for this run.",
+      });
+    }
+    void retryFollowUpSkip(runId).catch((err) => app.log.error(err));
+    return reply.code(202).send({ accepted: true });
+  });
+
+  app.post("/internal/notify-otp/:runId", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    const { runId } = req.params as { runId: string };
+    notifyOtpWake(runId);
+    return { ok: true };
+  });
+
   app.get("/internal/session-active/:runId", async (req, reply) => {
     const hdr = req.headers["x-internal-secret"];
     if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
@@ -77,6 +124,16 @@ async function main(): Promise<void> {
     }
     const { runId } = req.params as { runId: string };
     return { active: hasActiveSession(runId) };
+  });
+
+  app.post("/internal/force-stop/:runId", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AUTOMATION_INTERNAL_SECRET) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+    const { runId } = req.params as { runId: string };
+    const closed = await forceStopSession(runId);
+    return { ok: true, closed };
   });
 
   await app.listen({ port: env.PORT, host: "0.0.0.0" });

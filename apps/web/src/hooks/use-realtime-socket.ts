@@ -5,9 +5,16 @@ import { io, type Socket } from "socket.io-client";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveStore } from "@/stores/live-store";
 import { useLeadsStore } from "@/stores/leads-store";
-import { SocketEvents } from "@gdms/shared";
-import { getApiUrl, getSocketIoSettings } from "@/lib/api";
+import { SocketEvents, automationRunParamsSchema } from "@gdms/shared";
+import { apiFetch, getApiUrl, getSocketIoSettings } from "@/lib/api";
+import type { WorkflowRunDetail } from "@/lib/saved-automation-session";
 import { useAutomationSessionStore } from "@/stores/automation-session-store";
+
+/** Ignore automation socket payloads unless they belong to the linked run. */
+function isActiveWorkflowRun(workflowRunId: string | undefined): boolean {
+  const active = useLiveStore.getState().runId;
+  return Boolean(active && workflowRunId && workflowRunId === active);
+}
 
 export function useRealtimeSocket(): void {
   const token = useAuthStore((s) => s.accessToken);
@@ -67,27 +74,62 @@ export function useRealtimeSocket(): void {
     socketRef.current = socket;
 
     socket.on(SocketEvents.OTP_REQUIRED, (p: { workflowRunId: string }) => {
-      storeRef.current.openOtp(p.workflowRunId);
+      void (async () => {
+        const me = useAuthStore.getState().user;
+        if (!me?.id || !token) return;
+        try {
+          const run = await apiFetch<WorkflowRunDetail>(
+            `/v1/workflow-runs/${encodeURIComponent(p.workflowRunId)}`,
+            { token },
+          );
+          if (run.startedByUserId && run.startedByUserId !== me.id) return;
+          const live = useLiveStore.getState();
+          live.setRun(p.workflowRunId);
+          storeRef.current.openOtp(p.workflowRunId);
+          const params = automationRunParamsSchema.safeParse(run.runParams);
+          if (params.success) {
+            useAutomationSessionStore.getState().save(me.id, {
+              runId: run.id,
+              dealerId: run.dealerId,
+              operation: params.data.operation,
+              sources: params.data.sources,
+              subSources: params.data.subSources,
+            });
+          }
+        } catch {
+          /* ignore other users' OTP or stale runs */
+        }
+      })();
     });
-    socket.on(SocketEvents.STEP_COMPLETED, (p: { label: string }) => {
+    socket.on(SocketEvents.STEP_COMPLETED, (p: { workflowRunId?: string; label: string }) => {
+      if (!isActiveWorkflowRun(p.workflowRunId)) return;
       storeRef.current.setLastStep(p.label);
     });
-    socket.on(SocketEvents.SCREENSHOT_FRAME, (p: { imageBase64: string }) => {
-      storeRef.current.setFrame(p.imageBase64);
-    });
-    socket.on(SocketEvents.LOG_LINE, (p: { level: string; message: string; ts: string }) => {
-      storeRef.current.pushLog(p);
-      const m = p.message.toLowerCase();
-      if (
-        m.includes("gdms dashboard is ready") ||
-        m.includes("home screen detected") ||
-        m.includes("gdms home screen detected")
-      ) {
-        const dealerId = useAuthStore.getState().user?.dealerId;
-        if (dealerId) useAutomationSessionStore.getState().markGdmsReady(dealerId);
-      }
-    });
-    socket.on(SocketEvents.WORKFLOW_FAILED, (p: { error?: string }) => {
+    socket.on(
+      SocketEvents.SCREENSHOT_FRAME,
+      (p: { workflowRunId?: string; imageBase64: string }) => {
+        if (!isActiveWorkflowRun(p.workflowRunId)) return;
+        storeRef.current.setFrame(p.imageBase64);
+      },
+    );
+    socket.on(
+      SocketEvents.LOG_LINE,
+      (p: { workflowRunId?: string; level: string; message: string; ts: string }) => {
+        if (!isActiveWorkflowRun(p.workflowRunId)) return;
+        storeRef.current.pushLog(p);
+        const m = p.message.toLowerCase();
+        if (
+          m.includes("gdms dashboard is ready") ||
+          m.includes("home screen detected") ||
+          m.includes("gdms home screen detected")
+        ) {
+          const uid = useAuthStore.getState().user?.id;
+          if (uid) useAutomationSessionStore.getState().markGdmsReady(uid);
+        }
+      },
+    );
+    socket.on(SocketEvents.WORKFLOW_FAILED, (p: { workflowRunId?: string; error?: string }) => {
+      if (!isActiveWorkflowRun(p.workflowRunId)) return;
       const msg = typeof p?.error === "string" ? p.error : JSON.stringify(p);
       storeRef.current.pushLog({
         level: "error",
@@ -95,19 +137,38 @@ export function useRealtimeSocket(): void {
         ts: new Date().toISOString(),
       });
     });
-    socket.on(SocketEvents.WORKFLOW_PAUSED_USER, (p: { message?: string }) => {
-      const msg =
-        typeof p?.message === "string" && p.message.trim()
-          ? p.message
-          : "Automation paused — fix CRM in the visible browser, then use Retry transfer.";
-      storeRef.current.pushLog({
-        level: "warn",
-        message: `Paused for manual intervention: ${msg}`,
-        ts: new Date().toISOString(),
-      });
-    });
+    socket.on(
+      SocketEvents.WORKFLOW_PAUSED_USER,
+      (p: { workflowRunId?: string; message?: string }) => {
+        if (!isActiveWorkflowRun(p.workflowRunId)) return;
+        const msg =
+          typeof p?.message === "string" && p.message.trim()
+            ? p.message
+            : "Automation paused — fix CRM in the visible browser, then use Retry transfer.";
+        storeRef.current.pushLog({
+          level: "warn",
+          message: `Paused for manual intervention: ${msg}`,
+          ts: new Date().toISOString(),
+        });
+      },
+    );
+    socket.on(
+      SocketEvents.CONTROL_ACK,
+      (p: { workflowRunId?: string; action?: string; ok?: boolean }) => {
+        if (!isActiveWorkflowRun(p?.workflowRunId)) return;
+        if (p?.ok && p.action) {
+          const actionLabel =
+            p.action === "pause" ? "Pause" : p.action === "resume" ? "Resume" : "Stop";
+          storeRef.current.pushLog({
+            level: "info",
+            message: `${actionLabel} confirmed by server.`,
+            ts: new Date().toISOString(),
+          });
+        }
+      },
+    );
     socket.on(SocketEvents.WORKFLOW_COMPLETED, (p: { workflowRunId?: string }) => {
-      if (p?.workflowRunId && p.workflowRunId === useLiveStore.getState().runId) {
+      if (isActiveWorkflowRun(p.workflowRunId)) {
         storeRef.current.setWorkflowDone(true);
         storeRef.current.pushLog({
           level: "info",
@@ -119,7 +180,7 @@ export function useRealtimeSocket(): void {
     socket.on(
       SocketEvents.GDMS_SESSION_REDIRECTED,
       (p: { workflowRunId?: string; reason?: "timeout" | "logout" }) => {
-        if (p?.workflowRunId && p.workflowRunId === useLiveStore.getState().runId) {
+        if (isActiveWorkflowRun(p.workflowRunId)) {
           const message =
             p.reason === "logout"
               ? "GDMS logout — login page should appear in the preview."
@@ -139,7 +200,12 @@ export function useRealtimeSocket(): void {
         credentials: "include",
       })
         .then((r) => r.json())
-        .then((data: unknown) => setRows(data as never[]))
+        .then((data: unknown) => {
+          if (Array.isArray(data)) setRows(data as never[]);
+          else if (data && typeof data === "object" && "items" in data) {
+            setRows((data as { items: never[] }).items);
+          }
+        })
         .catch(() => {});
     });
 
@@ -164,11 +230,13 @@ export function useRealtimeSocket(): void {
       lastSocketErrorLogAtRef.current = now;
       const origin =
         typeof window !== "undefined" ? window.location.origin : "app";
-      storeRef.current.pushLog({
-        level: "error",
-        message: `Live updates disconnected (${err.message}). Check API on port 4000 is running (${origin} → ${getApiUrl()}). Automation may still run in the GDMS browser window.`,
-        ts: new Date().toISOString(),
-      });
+      if (useLiveStore.getState().runId) {
+        storeRef.current.pushLog({
+          level: "error",
+          message: `Live updates disconnected (${err.message}). Check API on port 4000 is running (${origin} → ${getApiUrl()}). Automation may still run in the GDMS browser window.`,
+          ts: new Date().toISOString(),
+        });
+      }
     });
 
     return () => {

@@ -91,6 +91,33 @@ Same DB/Redis + `CREDENTIALS_MASTER_KEY`, `AUTOMATION_INTERNAL_SECRET`, `AI_INTE
 
 > **Hostinger KVM:** CPU-only; XTTS/RVC real-time latency will be high — tune model sizes or add GPU later.
 
+### Option B — KVM API + PC worker (headed browser on your desktop)
+
+Production UI stays on **https://bot.edunexservices.in**. Redis jobs and Postgres run on the KVM; **worker** and **automation-service** run on your Windows PC with a visible Chromium window.
+
+**KVM (once per deploy):**
+
+```bash
+cd /opt/automation
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.tunnel.yml \
+  up -d postgres redis api web ai
+docker compose -f docker-compose.yml -f docker-compose.prod.yml stop worker automation
+ss -lntp | grep -E '6380|54322'   # loopback only
+```
+
+**PC:**
+
+1. Copy `scripts/kvm.host.example` → `scripts/kvm.host` (SSH `user@IP`).
+2. Terminal 1: `.\scripts\ssh-tunnel-kvm.ps1` (forwards `localhost:6380` / `54322`).
+3. Copy `apps/worker/.env.option-b.example` and `apps/automation-service/.env.option-b.example` to each `.env`; paste `CREDENTIALS_MASTER_KEY` and `AUTOMATION_INTERNAL_SECRET` from the KVM root `.env` (must match exactly).
+4. Do **not** run `pnpm docker:up` while the tunnel is open (same ports).
+5. Terminal 2: `.\scripts\option-b-check.ps1` then `.\scripts\option-b-start.ps1`.
+6. First time: `pnpm --filter @gdms/automation-service run pw:install`.
+
+**Flow:** Dashboard START → KVM API enqueues → PC worker consumes → PC automation opens GDMS on your screen. OTP uses shared Redis (tunnel); KVM `worker`/`automation` containers must stay **stopped** to avoid duplicate consumers.
+
+See `scripts/ssh-tunnel-kvm.ps1`, `scripts/option-b-check.ps1`, `scripts/option-b-start.ps1`.
+
 ## Enquiry transfer automation
 
 See [apps/automation-service/docs/ENQUIRY_TRANSFER.md](apps/automation-service/docs/ENQUIRY_TRANSFER.md) for the full GDMS enquiry transfer flow (reference images 1–17), consultant rotation, IST follow-up rules, and resume/retry behaviour.

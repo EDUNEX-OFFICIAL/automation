@@ -12,7 +12,10 @@
     "db:generate": "node scripts/prisma-generate.mjs",
     "db:push": "pnpm --filter @gdms/database exec prisma db push",
     "db:migrate": "pnpm --filter @gdms/database exec prisma migrate dev --name init",
-    "db:studio": "pnpm --filter @gdms/database exec prisma studio"
+    "db:studio": "pnpm --filter @gdms/database exec prisma studio",
+    "db:seed": "pnpm --filter @gdms/database exec prisma db seed",
+    "deploy:fast": "bash scripts/deploy-fast.sh web api",
+    "deploy:all": "bash scripts/deploy-fast.sh web api worker automation"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

@@ -12,15 +12,20 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "@gdms/auth": "workspace:^",
     "@prisma/client": "^6.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
     "prisma": "^6.2.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }

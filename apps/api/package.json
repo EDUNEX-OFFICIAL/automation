@@ -12,6 +12,8 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/static": "^8.0.4",
     "@gdms/auth": "workspace:*",
     "@gdms/database": "workspace:*",
     "@gdms/logger": "workspace:*",

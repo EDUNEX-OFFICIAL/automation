@@ -1,11 +1,12 @@
 import { Redis } from "ioredis";
-import { chromium, type BrowserContext, type Page } from "playwright";
-import fs from "node:fs";
+import type { BrowserContext, Page } from "playwright";
 import path from "node:path";
 import { createPrisma } from "@gdms/database";
 import {
   SocketEvents,
   WORKFLOW_REDIS_CHANNEL,
+  RUN_LOG_BUFFER_MAX_LINES,
+  runLogBufferKey,
   type LogLinePayload,
   type ScreenshotFramePayload,
 } from "@gdms/shared";
@@ -15,8 +16,11 @@ import {
   ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE,
   runEnquiryTransfer,
 } from "./enquiry-transfer.js";
+import { displayForUserOperation, gdmsBootstrapRedisKey, resolveGdmsHomeUrl } from "@gdms/shared";
 import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
 import { humanDelay } from "./human-delay.js";
+import { assertEnquiryTransferBrowserMode } from "./browser-context.js";
+import { launchGdmsPersistentContext } from "./browser-profile.js";
 import { env } from "./config.js";
 import { detectGdmsLoginError, gdmsLoginErrorMessage } from "./gdms-login-errors.js";
 import {
@@ -24,17 +28,24 @@ import {
   isGdmsLoggedIn,
   redisControlKey,
   waitForGdmsDashboardReady,
+  touchWatchHeartbeat,
   watchGdmsSession,
 } from "./gdms-session-watch.js";
 import {
   attachInputGuardListeners,
+  attachNonFatalNetworkLogging,
   installAutomationBrowserScripts,
 } from "./automation-browser-setup.js";
 import {
+  browserProfileKeyForOperation,
+  closeActiveSessionsForDealer,
   getActiveSession,
   registerActiveSession,
   unregisterActiveSession,
 } from "./active-sessions.js";
+import { runFollowUpSkip } from "./follow-up-skip.js";
+import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
+import { registerOtpWake } from "./otp-wake.js";
 
 const prisma = createPrisma();
 
@@ -43,6 +54,15 @@ function shouldKeepBrowserOnFailure(): boolean {
     return env.GDMS_KEEP_BROWSER_ON_FAILURE;
   }
   return env.PLAYWRIGHT_HEADED;
+}
+
+function isTransientRuntimeError(raw: string): boolean {
+  const s = raw.toLowerCase();
+  return (
+    /timeout|timed out|network|econnreset|econnrefused|net::err|request failed|socket hang up|target closed|navigation failed|err_connection|fetch failed/i.test(
+      s,
+    ) || s.includes("profile appears to be in use")
+  );
 }
 
 async function isPaused(redis: Redis, runId: string): Promise<boolean> {
@@ -72,15 +92,82 @@ async function publish(
   await redis.publish(WORKFLOW_REDIS_CHANNEL, JSON.stringify({ type, dealerId, payload }));
 }
 
-async function waitForOtp(redis: Redis, runId: string, timeoutMs: number): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await isStopped(redis, runId)) throw new Error("stopped");
-    const v = await redis.get(`run:${runId}:otp`);
-    if (v) return v;
-    await new Promise((r) => setTimeout(r, 150));
+function otpReadyChannel(runId: string): string {
+  return `run:${runId}:otp_ready`;
+}
+
+async function readOtpFromRedis(redis: Redis, runId: string): Promise<string | null> {
+  try {
+    const otp = await redis.get(`run:${runId}:otp`);
+    if (!otp) return null;
+    const gate = await redis.get(`run:${runId}:otp_gate`);
+    const at = await redis.get(`run:${runId}:otp_at`);
+    if (gate && at) {
+      if (Number(at) < Number(gate)) return null;
+      return otp;
+    }
+    if (gate && !at) return null;
+    return otp;
+  } catch {
+    return null;
   }
-  throw new Error("OTP timeout");
+}
+
+/** Waits for dashboard OTP submit (Redis key + pub/sub wake). Poll-only was unreliable on long Docker runs. */
+async function waitForOtp(redis: Redis, runId: string, timeoutMs: number): Promise<string> {
+  const existing = await readOtpFromRedis(redis, runId);
+  if (existing) return existing;
+
+  const subscriber = redis.duplicate();
+  await subscriber.subscribe(otpReadyChannel(runId));
+
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = (): void => {
+      subscriber.removeAllListeners("message");
+      void subscriber.unsubscribe(otpReadyChannel(runId)).catch(() => undefined);
+      void subscriber.quit().catch(() => undefined);
+    };
+
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      unregisterWake();
+      fn();
+    };
+
+    const tryResolve = async (): Promise<void> => {
+      if (await isStopped(redis, runId)) {
+        finish(() => reject(new Error("stopped")));
+        return;
+      }
+      const v = await readOtpFromRedis(redis, runId);
+      if (v) finish(() => resolve(v));
+    };
+
+    const timer = setTimeout(() => {
+      finish(() => reject(new Error("OTP timeout")));
+    }, timeoutMs);
+
+    const unregisterWake = registerOtpWake(runId, () => {
+      void tryResolve();
+    });
+
+    subscriber.on("message", () => {
+      void tryResolve();
+    });
+
+    void (async () => {
+      while (!settled) {
+        await tryResolve();
+        if (settled) return;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    })();
+  });
 }
 
 function escapeRegExp(s: string): string {
@@ -140,6 +227,7 @@ function resolveValue(
 export type ExecutePayload = {
   runId: string;
   dealerId: string;
+  startedByUserId: string;
   gdmsUsername: string;
   gdmsPassword: string;
   loginWorkflow: WorkflowDefinition;
@@ -184,6 +272,16 @@ async function executeStep(
     return;
   }
   if (step.type === "click") {
+    if (step.id === "send_otp" && creds.gdmsPassword) {
+      const passField = page.getByPlaceholder(/password/i).first();
+      if (await passField.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        const current = (await passField.inputValue().catch(() => "")).trim();
+        if (!current) {
+          await passField.fill(creds.gdmsPassword, { timeout });
+          await humanDelay(200, 400);
+        }
+      }
+    }
     const sel = step.selector;
     if (!sel) throw new Error("click requires selector");
     const pw = parsePwLocator(sel);
@@ -228,8 +326,19 @@ async function executeStep(
     return;
   }
   if (step.type === "wait_for_otp") {
+    if (await isGdmsDashboardReady(page)) {
+      await prisma.workflowRun.update({
+        where: { id: runId },
+        data: { status: "RUNNING" },
+      });
+      return;
+    }
     const detected = await detectGdmsLoginError(page, 1500);
     if (detected) throw new Error(gdmsLoginErrorMessage(detected));
+    const gate = String(Date.now());
+    await redisClient.set(`run:${runId}:otp_gate`, gate, "EX", 3600);
+    await redisClient.del(`run:${runId}:otp`);
+    await redisClient.del(`run:${runId}:otp_at`);
     await publish(redisClient, SocketEvents.OTP_REQUIRED, dealerId, {
       workflowRunId: runId,
       hint: step.label,
@@ -255,6 +364,7 @@ async function executeStep(
 export async function runWorkflow(payload: ExecutePayload): Promise<void> {
   const redisClient = new Redis(env.REDIS_URL);
   let seq = 0;
+  let aliveLoop: ReturnType<typeof setInterval> | null = null;
   let context: BrowserContext | null = null;
   let shotLoop: ReturnType<typeof setInterval> | null = null;
   let otpResolved: string | undefined;
@@ -271,6 +381,13 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       ts: new Date().toISOString(),
     };
     await publish(redisClient, SocketEvents.LOG_LINE, payload.dealerId, line);
+    try {
+      await redisClient.lpush(runLogBufferKey(payload.runId), JSON.stringify(line));
+      await redisClient.ltrim(runLogBufferKey(payload.runId), 0, RUN_LOG_BUFFER_MAX_LINES - 1);
+      await redisClient.expire(runLogBufferKey(payload.runId), 86_400);
+    } catch {
+      /* ignore buffer errors */
+    }
   };
 
   const baseCreds = {
@@ -278,7 +395,27 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     gdmsPassword: payload.gdmsPassword,
   };
 
+  const profileKey = browserProfileKeyForOperation(
+    payload.dealerId,
+    payload.operation,
+    payload.startedByUserId,
+  );
+  const isEnquiryTransfer = payload.operation === "enquiry_transfer";
+  const isFollowUpSkip = payload.operation === "follow_up_skip" || payload.operation === "follow_up";
+  /** Enquiry transfer runs until Stop; Follow Up Skip exits when the list is empty. */
+  const isLongRunningAutomation = isEnquiryTransfer;
+  const isGdmsBrowserAutomation = isEnquiryTransfer || isFollowUpSkip;
+
+  const startAliveHeartbeat = (): void => {
+    if (aliveLoop) return;
+    void touchWatchHeartbeat(redisClient, payload.runId);
+    aliveLoop = setInterval(() => {
+      void touchWatchHeartbeat(redisClient, payload.runId);
+    }, 10_000);
+  };
+
   try {
+    startAliveHeartbeat();
     await prisma.workflowRun.update({
       where: { id: payload.runId },
       data: { status: "RUNNING", errorMessage: null },
@@ -289,31 +426,44 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       dealerId: payload.dealerId,
     });
 
-    if (payload.operation === "enquiry_transfer" && !env.PLAYWRIGHT_HEADED) {
-      throw new Error(
-        "Enquiry transfer requires PLAYWRIGHT_HEADED=true (visible browser only — set it in apps/automation-service/.env and restart pnpm dev).",
-      );
+    if (isGdmsBrowserAutomation) {
+      assertEnquiryTransferBrowserMode();
     }
 
-    const sessionDir = path.join(env.SESSIONS_DIR, payload.dealerId);
-    fs.mkdirSync(sessionDir, { recursive: true });
-
-    const headed = env.PLAYWRIGHT_HEADED;
-    context = await chromium.launchPersistentContext(sessionDir, {
-      headless: !headed,
-      args: headed ? [] : ["--no-sandbox", "--disable-dev-shm-usage"],
-      viewport: { width: 1280, height: 800 },
-    });
+    const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
+    const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
+    await closeActiveSessionsForDealer(payload.dealerId, profileKey);
+    context = await launchGdmsPersistentContext(sessionDir, { display: vncDisplay });
+    await log(
+      "info",
+      `GDMS browser for user ${payload.startedByUserId} on display ${vncDisplay} (${payload.operation}).`,
+    );
 
     await installAutomationBrowserScripts(context);
+    attachNonFatalNetworkLogging(context, (message) => {
+      void log("warn", message);
+    });
 
-    if (await applyGdmsBootstrapCookies(context, sessionDir)) {
-      await log("info", "GDMS bootstrap cookies applied from env.");
+    const bootstrapCookiesApplied = await applyGdmsBootstrapCookies(
+      context,
+      sessionDir,
+      payload.startedByUserId,
+    );
+    if (bootstrapCookiesApplied) {
+      await log("info", "GDMS bootstrap cookies applied (saved token or env).");
+    } else {
+      const storedToken = await redisClient.get(gdmsBootstrapRedisKey(payload.startedByUserId));
+      if (storedToken?.trim()) {
+        await log(
+          "warn",
+          "Saved GDMS login token could not be applied — open Dashboard, paste a fresh BNES_JSESSIONID, then START again.",
+        );
+      }
     }
 
     page = await context.newPage();
 
-    if (payload.operation === "enquiry_transfer") {
+    if (isGdmsBrowserAutomation) {
       detachInputGuard = attachInputGuardListeners(page);
       await log(
         "info",
@@ -321,8 +471,8 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       );
     }
 
-    /** Preview streaming only when headless non-transfer jobs need remote visibility. */
-    const screenshotsEnabled = !headed && payload.operation !== "enquiry_transfer";
+    /** JPEG preview on Live session when noVNC and/or explicit preview stream is enabled. */
+    const screenshotsEnabled = env.GDMS_PREVIEW_STREAM === true || env.GDMS_REMOTE_VIEW === true;
     const shotMs = 2000;
     captureFrame = async (): Promise<void> => {
       if (!screenshotsEnabled) return;
@@ -347,11 +497,13 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       }, shotMs);
     }
 
-    if (payload.operation === "enquiry_transfer" && context && page) {
+    if (isGdmsBrowserAutomation && context && page) {
       browserRetained = true;
       registerActiveSession({
         runId: payload.runId,
         dealerId: payload.dealerId,
+        startedByUserId: payload.startedByUserId,
+        profileKey,
         page,
         context,
         payload,
@@ -372,23 +524,52 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       throw new Error("Missing login or operation workflow definition");
     }
 
-    const baseUrl =
+    const loginUrl =
       loginWorkflow.steps.find((s) => s.type === "navigate" && s.url)?.url ??
       env.GDMS_BASE_URL;
+    const homeUrl = resolveGdmsHomeUrl(env.GDMS_HOME_URL);
 
-    if (baseUrl) {
-      await page.goto(baseUrl, { timeout: 60_000, waitUntil: "domcontentloaded" });
+    const firstNav = bootstrapCookiesApplied ? homeUrl : loginUrl;
+    if (firstNav) {
+      await page.goto(firstNav, { timeout: 60_000, waitUntil: "domcontentloaded" });
     }
 
-    const skipLogin =
-      payload.operation === "enquiry_transfer"
-        ? await isGdmsDashboardReady(page)
-        : await isGdmsLoggedIn(page);
+    let skipLogin = isGdmsBrowserAutomation
+      ? await isGdmsDashboardReady(page)
+      : await isGdmsLoggedIn(page);
+
+    if (!skipLogin && bootstrapCookiesApplied && homeUrl) {
+      for (let attempt = 0; attempt < 4 && !skipLogin; attempt++) {
+        await page.goto(homeUrl, { timeout: 90_000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+        await page.waitForTimeout(2000);
+        skipLogin = isGdmsBrowserAutomation
+          ? await isGdmsDashboardReady(page)
+          : await isGdmsLoggedIn(page);
+        if (skipLogin) break;
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 90_000 }).catch(() => undefined);
+        await page.waitForTimeout(1500);
+        skipLogin = isGdmsBrowserAutomation
+          ? await isGdmsDashboardReady(page)
+          : await isGdmsLoggedIn(page);
+      }
+      if (skipLogin) {
+        await log("info", "GDMS session restored from login token — login steps skipped.");
+      }
+    }
+
+    if (!skipLogin && bootstrapCookiesApplied) {
+      const msg =
+        "Saved GDMS login token did not open a logged-in session (expired or wrong cookie). " +
+        "Log in to GDMS in Chrome, copy a fresh BNES_JSESSIONID from DevTools → Application → Cookies, " +
+        "save it on Dashboard → Use GDMS login token, then START again.";
+      await log("error", msg);
+      throw new Error(msg);
+    }
     const stepGroups: { label: string; steps: WorkflowDefinition["steps"] }[] = [];
     if (skipLogin) {
       await log(
         "info",
-        payload.operation === "enquiry_transfer"
+        isGdmsBrowserAutomation
           ? "GDMS home screen detected — skipping login."
           : "GDMS session active — skipping login.",
       );
@@ -474,6 +655,8 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
     };
 
+    const dealerRemarkConfig = await loadDealerRemarkConfig(payload.dealerId);
+
     if (payload.operation === "enquiry_transfer") {
       await log("info", "Starting enquiry transfer automation (runs until Stop).");
       await humanDelay(800, 1500);
@@ -481,9 +664,14 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
         page,
         runId: payload.runId,
         dealerId: payload.dealerId,
+        startedByUserId: payload.startedByUserId,
         redis: redisClient,
         sources: payload.sources,
         subSources: payload.subSources,
+        remarkConfig: {
+          defaultEnquiryRemarkBase: dealerRemarkConfig.defaultEnquiryRemarkBase,
+          enquiryRemarkRules: dealerRemarkConfig.enquiryRemarkRules,
+        },
         log,
         shouldStop: runCtx.shouldStop,
         waitIfPaused: runCtx.waitIfPaused,
@@ -492,11 +680,38 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       await humanDelay(500, 1200);
     }
 
+    if (isFollowUpSkip) {
+      await log("info", "Starting Follow Up Skip (Today's Follow Up) — stops when list is empty.");
+      await humanDelay(800, 1500);
+      await runFollowUpSkip({
+        page,
+        runId: payload.runId,
+        dealerId: payload.dealerId,
+        redis: redisClient,
+        followUpSkipRemarkBases: dealerRemarkConfig.followUpSkipRemarkBases,
+        log,
+        shouldStop: runCtx.shouldStop,
+        waitIfPaused: runCtx.waitIfPaused,
+        signalManualIntervention,
+      });
+      await log("info", "Follow Up Skip complete — closing browser and marking run finished.");
+      await prisma.workflowRun.update({
+        where: { id: payload.runId },
+        data: { status: "COMPLETED", endedAt: new Date(), currentStep: "completed" },
+      });
+      await publish(redisClient, SocketEvents.WORKFLOW_COMPLETED, payload.dealerId, {
+        workflowRunId: payload.runId,
+      });
+      await humanDelay(500, 1200);
+    }
+
     if (payload.kind === "inquiry_fetch") {
       await ingestInquiriesFromPage(page, payload.dealerId, redisClient, prisma, log);
     }
 
-    if (payload.operation !== "enquiry_transfer") {
+    const longRunningOp = isEnquiryTransfer;
+
+    if (!longRunningOp && !isFollowUpSkip) {
       await prisma.workflowRun.update({
         where: { id: payload.runId },
         data: { status: "COMPLETED", endedAt: new Date() },
@@ -509,7 +724,7 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
 
     if (
       (payload.operation || payload.kind === "gdms_login") &&
-      payload.operation !== "enquiry_transfer" &&
+      !longRunningOp &&
       context &&
       page
     ) {
@@ -548,9 +763,9 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     }
 
     const pauseInsteadOfFail =
-      payload.operation === "enquiry_transfer" &&
+      isLongRunningAutomation &&
       !stopped &&
-      shouldKeepBrowserOnFailure();
+      (shouldKeepBrowserOnFailure() || isTransientRuntimeError(raw));
 
     if (!pausedUser) {
       await prisma.workflowRun.update({
@@ -586,10 +801,11 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       !stopped &&
       context &&
       page &&
-      ((pausedUser && payload.operation === "enquiry_transfer") ||
+      ((pausedUser && isLongRunningAutomation) ||
         (!pausedUser &&
-          shouldKeepBrowserOnFailure() &&
-          (payload.operation === "enquiry_transfer" || payload.kind === "gdms_login")));
+          (pauseInsteadOfFail ||
+            (shouldKeepBrowserOnFailure() &&
+              (isLongRunningAutomation || payload.kind === "gdms_login")))));
 
     if (keepBrowser && page && context) {
       browserRetained = true;
@@ -605,6 +821,8 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
         registerActiveSession({
           runId: payload.runId,
           dealerId: payload.dealerId,
+          startedByUserId: payload.startedByUserId,
+          profileKey,
           page: activePage,
           context: activeContext,
           payload,
@@ -612,9 +830,7 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
           stopScreenshots,
         });
       }
-      const enquiryPaused =
-        payload.operation === "enquiry_transfer" &&
-        (pausedUser || pauseInsteadOfFail);
+      const enquiryPaused = isLongRunningAutomation && (pausedUser || pauseInsteadOfFail);
       if (enquiryPaused) {
         await log(
           "info",
@@ -646,6 +862,10 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       }
     }
   } finally {
+    if (aliveLoop) {
+      clearInterval(aliveLoop);
+      aliveLoop = null;
+    }
     if (!browserRetained) {
       detachInputGuard?.();
       unregisterActiveSession(payload.runId);

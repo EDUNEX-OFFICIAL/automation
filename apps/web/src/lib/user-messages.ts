@@ -5,7 +5,7 @@ const GENERIC =
 const NETWORK =
   "We couldn't reach the server. Check your connection and try again.";
 const API_NOT_RUNNING =
-  "The API is not running (often port 4000 is in use by another app or a duplicate pnpm dev). Stop other dev processes, free port 4000, restart with a single pnpm dev, then submit OTP again.";
+  "We could not reach the server. Check your connection and try again.";
 const SERVER =
   "Something went wrong on our side. Please try again in a moment.";
 const INVALID_CREDENTIALS = "Email or password is incorrect.";
@@ -54,9 +54,9 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
   const lower = message.toLowerCase();
 
   if (lower.includes("invalid credentials")) return INVALID_CREDENTIALS;
-  if (lower.includes("email and password required")) {
+  if (lower.includes("email and password required") || lower.includes("username and password")) {
     return context === "auth"
-      ? "Please enter your email and password."
+      ? "Please enter your username and password."
       : GENERIC;
   }
   if (lower.includes("could not create or load a user for open login")) {
@@ -72,8 +72,8 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
   if (lower.includes("executable doesn't exist") || lower.includes("playwright install")) {
     return "Browser automation is not set up on this computer yet. Ask your administrator to install it, then try again.";
   }
-  if (lower.includes("gdms account not configured")) {
-    return "GDMS login is not set up yet. Save your credentials in Settings, then try again.";
+  if (lower.includes("gdms account not configured") || lower.includes("gdms credentials not configured")) {
+    return "Your GDMS login is not saved yet. Open Settings → GDMS login and save your username and password.";
   }
   if (lower.includes("gdms rejected login") || lower.includes("no otp was sent")) {
     return GDMS_LOGIN_REJECTED;
@@ -88,13 +88,22 @@ function mapKnownApiError(message: string, context: UserMessageContext): string 
     lower.includes("worker did not pick up") ||
     lower.includes("@gdms/worker")
   ) {
-    return "Automation is queued but the worker is not running on the server. Start @gdms/worker (and automation-service) with the same Redis as the API, then press Retry queue.";
+    return "Automation is queued but not starting. Use Retry queue or contact your administrator.";
   }
   if (lower.includes("run is not in live preview")) {
     return "This run is not showing a live preview. Start GDMS login from the Dashboard first.";
   }
   if (lower.includes("live preview is no longer active")) {
     return "The live browser preview has already ended. Start a new GDMS login run, or use Stop only while the preview is still active.";
+  }
+  if (lower.includes("still queued")) {
+    return "This run is still in the queue. Wait a few seconds, or press Stop to cancel it.";
+  }
+  if (lower.includes("cannot be paused")) {
+    return "Pause is only available while automation is actively running.";
+  }
+  if (lower.includes("not paused")) {
+    return "Resume is only available when the run is paused or failed.";
   }
   if (lower.includes("already running for this dealer")) {
     return "Another automation is still marked active. Open Live session and press Stop on that run, then try START again.";

@@ -2,85 +2,266 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #fafafa;
-  --foreground: #0a0a0a;
-}
+@layer base {
+  :root {
+    --sidebar-width: 16.5rem;
+    --header-height: 3.5rem;
+    --topbar-height: 3.5rem;
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-}
+    /* Google / Material-inspired light palette */
+    --background: 220 14% 96%;
+    --foreground: 220 9% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 9% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 9% 10%;
 
-/* Nav bloom drawer — scale + fade from header, not edge slide */
-@keyframes nav-bloom-in {
-  from {
-    opacity: 0;
-    transform: translateY(-12px) scale(0.94);
-    filter: blur(4px);
+    --primary: 217 89% 51%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 220 9% 20%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 6% 42%;
+
+    --accent: 217 89% 96%;
+    --accent-foreground: 217 89% 40%;
+
+    --destructive: 4 74% 49%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 56% 38%;
+    --warning: 36 100% 42%;
+    --info: 217 89% 51%;
+
+    --border: 220 10% 88%;
+    --input: 220 10% 86%;
+    --ring: 217 89% 51%;
+    --radius: 0.75rem;
+
+    --sidebar: 0 0% 100%;
+    --sidebar-foreground: 220 9% 15%;
+    --sidebar-muted: 220 6% 46%;
+    --sidebar-active: 217 89% 51%;
+    --sidebar-hover: 220 14% 96%;
+
+    --header: 0 0% 100%;
+    --header-foreground: 220 9% 10%;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
+
+  .dark {
+    --background: 222 20% 7%;
+    --foreground: 210 20% 96%;
+    --card: 222 16% 11%;
+    --card-foreground: 210 20% 96%;
+    --popover: 222 16% 11%;
+    --popover-foreground: 210 20% 96%;
+
+    --primary: 217 91% 62%;
+    --primary-foreground: 222 20% 7%;
+
+    --secondary: 222 14% 16%;
+    --secondary-foreground: 210 20% 96%;
+
+    --muted: 222 14% 16%;
+    --muted-foreground: 215 12% 58%;
+
+    --accent: 217 40% 18%;
+    --accent-foreground: 217 91% 75%;
+
+    --destructive: 4 62% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 12% 20%;
+    --input: 222 12% 22%;
+    --ring: 217 91% 62%;
+
+    --sidebar: 222 18% 9%;
+    --sidebar-foreground: 210 20% 96%;
+    --sidebar-muted: 215 12% 55%;
+    --sidebar-active: 217 91% 62%;
+    --sidebar-hover: 222 14% 14%;
+
+    --header: 222 16% 11%;
+    --header-foreground: 210 20% 96%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+    font-size: 16px;
+  }
+
+  body {
+    @apply bg-background text-[15px] leading-relaxed text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+
+  :focus-visible {
+    outline: none;
+  }
+
+  select:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible {
+    @apply ring-2 ring-ring ring-offset-0;
   }
 }
 
-@keyframes nav-bloom-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
   }
-  to {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.96);
-  }
-}
-
-@keyframes nav-item-rise {
-  from {
-    opacity: 0;
-    transform: translateX(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
+  .animate-fade-in,
+  .nav-bloom-panel,
+  .menu-toggle-bar {
+    animation: none !important;
+    transition: none !important;
   }
 }
 
-.nav-bloom-panel {
-  transform-origin: top center;
-  transition:
-    opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-    filter 0.45s ease;
+@layer components {
+  .app-canvas {
+    @apply min-h-screen bg-background;
+  }
+
+  .page-stack {
+    @apply flex w-full flex-col gap-6 lg:gap-7;
+  }
+
+  .page-main {
+    @apply w-full flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8;
+  }
+
+  .content-grid {
+    @apply grid gap-5 lg:grid-cols-2 lg:gap-6;
+  }
+
+  .surface-card {
+    @apply rounded-xl border border-border/80 bg-card shadow-card;
+  }
+
+  .glass-panel {
+    @apply surface-card;
+  }
+
+  .data-table-wrap {
+    @apply overflow-x-auto rounded-xl border border-border/80 bg-card shadow-card;
+  }
+
+  .data-table {
+    @apply w-full min-w-[520px] text-left text-sm;
+  }
+
+  .data-table thead tr {
+    @apply border-b border-border bg-muted/50;
+  }
+
+  .data-table th {
+    @apply whitespace-nowrap px-4 py-3 text-xs font-medium text-muted-foreground;
+  }
+
+  .data-table tbody tr {
+    @apply border-b border-border/60 transition-colors last:border-0 hover:bg-muted/40;
+  }
+
+  .data-table td {
+    @apply px-4 py-3.5 align-middle;
+  }
+
+  .roster-item {
+    @apply flex flex-col gap-3 rounded-xl border border-border/80 bg-card px-4 py-4 shadow-card transition-shadow hover:shadow-md sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .panel-info {
+    @apply rounded-xl border border-primary/15 bg-primary/5 px-4 py-3.5 text-sm;
+  }
+
+  .panel-success {
+    @apply rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3.5 text-sm;
+  }
+
+  .panel-warning {
+    @apply rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3.5 text-sm;
+  }
+
+  .form-field {
+    @apply flex flex-col gap-2.5;
+  }
+
+  .form-stack {
+    @apply flex flex-col gap-6;
+  }
+
+  .form-row-2 {
+    @apply grid gap-5 sm:grid-cols-2;
+  }
+
+  /* Hide native select arrow — NativeSelect renders one chevron only */
+  .native-select-control {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: none;
+  }
+  .native-select-control::-ms-expand {
+    display: none;
+  }
+
+  /* Active nav — Google-style pill */
+  .nav-pill-active {
+    @apply bg-primary/10 font-medium text-primary dark:bg-primary/15 dark:text-primary;
+  }
+
+  .nav-rail-active {
+    @apply nav-pill-active;
+  }
 }
 
-.nav-bloom-open {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  filter: blur(0);
-  pointer-events: auto;
-  animation: nav-bloom-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .gradient-mesh {
+    background:
+      radial-gradient(ellipse 80% 60% at 0% -10%, hsl(var(--primary) / 0.07), transparent 55%),
+      hsl(var(--background));
+  }
+
+  .auth-panel-gradient {
+    background: linear-gradient(145deg, hsl(217 45% 18%) 0%, hsl(217 55% 28%) 50%, hsl(220 30% 12%) 100%);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
-.nav-bloom-closed {
-  opacity: 0;
-  transform: translateY(-12px) scale(0.94);
-  filter: blur(4px);
-  pointer-events: none;
-}
-
-.nav-bloom-item {
-  opacity: 0;
-  transform: translateX(-10px);
-}
-
-.nav-bloom-item-visible {
-  animation: nav-item-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
-
-/* Hamburger → X morph */
 .menu-toggle-bar {
   position: absolute;
   left: 50%;
@@ -89,38 +270,39 @@ body {
   border-radius: 9999px;
   background: currentColor;
   transform: translateX(-50%);
-  transition:
-    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.25s ease,
-    width 0.35s ease;
+  transition: transform 0.3s ease, opacity 0.2s ease, width 0.3s ease;
 }
 
-.menu-toggle-bar-1 {
-  top: calc(50% - 6px);
-}
-
-.menu-toggle-bar-2 {
-  top: 50%;
-  margin-top: -1px;
-}
-
-.menu-toggle-bar-3 {
-  top: calc(50% + 6px);
-}
+.menu-toggle-bar-1 { top: calc(50% - 6px); }
+.menu-toggle-bar-2 { top: 50%; margin-top: -1px; }
+.menu-toggle-bar-3 { top: calc(50% + 6px); }
 
 .menu-toggle-active .menu-toggle-bar-1 {
   top: 50%;
   margin-top: -1px;
   transform: translateX(-50%) rotate(45deg);
 }
-
 .menu-toggle-active .menu-toggle-bar-2 {
   opacity: 0;
   width: 0;
 }
-
 .menu-toggle-active .menu-toggle-bar-3 {
   top: 50%;
   margin-top: -1px;
   transform: translateX(-50%) rotate(-45deg);
+}
+
+.nav-bloom-panel {
+  transform-origin: top left;
+  transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+.nav-bloom-open {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.nav-bloom-closed {
+  opacity: 0;
+  transform: translateX(-12px);
+  pointer-events: none;
 }

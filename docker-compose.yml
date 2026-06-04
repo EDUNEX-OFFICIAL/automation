@@ -19,17 +19,23 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    volumes:
+      - api_uploads:/repo/apps/api/uploads
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/gdms?schema=public
       REDIS_URL: redis://redis:6379
       JWT_SECRET: dev_jwt_secret_replace_me_in_prod_minimum_32_chars
       REFRESH_TOKEN_SECRET: dev_refresh_secret_replace_me_minimum_32ch
       CREDENTIALS_MASTER_KEY: MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=
-      CORS_ORIGIN: http://localhost:3000
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       VOICE_BRIDGE_ENABLED: "false"
       AUTOMATION_INTERNAL_SECRET: dev-internal-secret-change-me
+      AUTH_DEV_OPEN_LOGIN: "true"
       NODE_ENV: production
       PORT: 4000
+      UPLOADS_DIR: /repo/apps/api/uploads
+      GDMS_REMOTE_VIEW: ${GDMS_REMOTE_VIEW:-true}
+      GDMS_VNC_PASSWORD: ${GDMS_VNC_PASSWORD:-gdms}
     ports:
       - "4000:4000"
     depends_on:
@@ -50,11 +56,13 @@ services:
       AI_SERVICE_URL: http://ai:4200
       AI_INTERNAL_SECRET: dev-ai-secret-change-me
       GDMS_BASE_URL: https://ndms.hmil.net/cmm/cmmi/selectLoginMain.dms
-
     depends_on:
-      - postgres
-      - redis
-      - automation
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      automation:
+        condition: service_healthy
 
   automation:
     build:
@@ -70,11 +78,60 @@ services:
       PORT: 4101
       PLAYWRIGHT_HEADED: "true"
       DISPLAY: ":99"
+      GDMS_PREVIEW_STREAM: ${GDMS_PREVIEW_STREAM:-true}
+      GDMS_REMOTE_VIEW: ${GDMS_REMOTE_VIEW:-true}
+      GDMS_VNC_PASSWORD: ${GDMS_VNC_PASSWORD:-gdms}
+      GDMS_VNC_WIDTH: ${GDMS_VNC_WIDTH:-1920}
+      GDMS_VNC_HEIGHT: ${GDMS_VNC_HEIGHT:-1080}
+    expose:
+      - "4101"
+      - "6082"
+      - "6083"
+      - "6084"
+      - "6085"
+      - "6086"
+      - "6087"
+      - "6088"
+      - "6089"
+      - "6090"
+      - "6091"
+      - "6092"
+      - "6093"
+      - "6094"
+      - "6095"
+      - "6096"
+      - "6097"
+      - "6098"
+      - "6099"
+      - "6100"
+      - "6101"
+      - "6102"
+      - "6103"
+      - "6104"
+      - "6105"
+      - "6106"
+      - "6107"
+      - "6108"
+      - "6109"
+      - "6110"
+      - "6111"
+      - "6112"
+      - "6113"
     volumes:
       - sessions:/data/sessions
     depends_on:
       - postgres
       - redis
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:4101/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
 
   ai:
     build:
@@ -95,9 +152,15 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /api-upstream
+        NEXT_PUBLIC_SOCKET_URL: /api-upstream
+        API_UPSTREAM_URL: http://api:4000
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000
-      NEXT_PUBLIC_SOCKET_URL: http://localhost:4000
+      API_UPSTREAM_URL: http://api:4000
+      GDMS_BROWSER_UPSTREAM_URL: http://automation:6080
+      GDMS_BROWSER_2_UPSTREAM_URL: http://automation:6081
+      NODE_ENV: production
     ports:
       - "3000:3000"
     depends_on:
@@ -106,3 +169,4 @@ services:
 volumes:
   pgdata: {}
   sessions: {}
+  api_uploads: {}

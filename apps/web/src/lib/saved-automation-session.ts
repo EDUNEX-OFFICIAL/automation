@@ -9,6 +9,7 @@ import {
   useAutomationSessionStore,
   type SavedAutomationSession,
 } from "@/stores/automation-session-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { useLiveStore } from "@/stores/live-store";
 
 const IN_FLIGHT_STATUSES = new Set([
@@ -16,29 +17,29 @@ const IN_FLIGHT_STATUSES = new Set([
   "RUNNING",
   "PAUSED_OTP",
   "PAUSED_USER",
-  "FAILED",
 ]);
 
-type WorkflowRunSummary = { id: string; status: string; dealerId?: string };
+type WorkflowRunSummary = { id: string; status: string; dealerId?: string; startedByUserId?: string | null };
 
 export type WorkflowRunDetail = {
   id: string;
   dealerId: string;
   status: string;
   runParams: unknown;
+  startedByUserId?: string | null;
   errorMessage?: string | null;
 };
 
-const RESUMABLE_STATUSES = new Set([
-  "FAILED",
-  "PAUSED_USER",
-  "RUNNING",
-  "PAUSED_OTP",
-  "STOPPED",
-]);
+const RESUMABLE_STATUSES = new Set(["FAILED", "PAUSED_USER", "RUNNING", "PAUSED_OTP"]);
 
 function normalizeRunIdInput(raw: string): string {
   return raw.trim();
+}
+
+function currentUserId(): string {
+  const id = useAuthStore.getState().user?.id;
+  if (!id) throw new Error("Not signed in");
+  return id;
 }
 
 /** Load dealer + automation options from an existing workflow run (session / run ID). */
@@ -58,7 +59,7 @@ export async function loadSessionByRunId(
   const params = automationRunParamsSchema.safeParse(run.runParams);
   if (!params.success) {
     throw new Error(
-      "This session does not have valid enquiry transfer settings. Start a new run from the form instead.",
+      "This session does not have valid automation settings. Start a new enquiry transfer from the dashboard instead.",
     );
   }
 
@@ -82,35 +83,51 @@ export async function startAutomationFromSessionId(
   runIdInput: string,
 ): Promise<SavedAutomationSession> {
   const saved = await loadSessionByRunId(token, runIdInput);
-  useAutomationSessionStore.getState().save(saved);
+  useAutomationSessionStore.getState().save(currentUserId(), saved);
   await resumeSavedAutomationSession(token, saved);
   return saved;
 }
 
-/** Link Live session to the current automation run (works for super admin without dealerId on JWT). */
-export async function findInFlightWorkflowRunId(token: string): Promise<string | null> {
+/** Link Live session to this user's in-flight run only. */
+export async function findInFlightWorkflowRunId(
+  token: string,
+  userId: string,
+): Promise<string | null> {
   const liveRunId = useLiveStore.getState().runId;
-  if (liveRunId) return liveRunId;
+  if (liveRunId) {
+    try {
+      const run = await apiFetch<{ status: string }>(`/v1/workflow-runs/${liveRunId}`, { token });
+      if (IN_FLIGHT_STATUSES.has(run.status)) return liveRunId;
+    } catch {
+      useLiveStore.getState().setRun(null);
+    }
+  }
 
-  const byDealer = useAutomationSessionStore.getState().byDealer;
-  for (const saved of Object.values(byDealer)) {
-    if (!saved?.runId) continue;
+  const saved = useAutomationSessionStore.getState().get(userId);
+  if (saved?.runId) {
     try {
       const run = await apiFetch<{ status: string }>(`/v1/workflow-runs/${saved.runId}`, { token });
       if (IN_FLIGHT_STATUSES.has(run.status)) return saved.runId;
     } catch {
-      /* stale saved id */
+      useAutomationSessionStore.getState().clear(userId);
     }
   }
 
   const res = await apiFetch<{ run: WorkflowRunSummary | null }>(`/v1/workflow-runs/in-flight`, {
     token,
   });
-  return res.run?.id ?? null;
+  const id = res.run?.id ?? null;
+  if (id && res.run?.startedByUserId && res.run.startedByUserId !== userId) {
+    return null;
+  }
+  return id;
 }
 
-export async function linkLiveSessionToInFlightRun(token: string): Promise<string | null> {
-  const id = await findInFlightWorkflowRunId(token);
+export async function linkLiveSessionToInFlightRun(
+  token: string,
+  userId: string,
+): Promise<string | null> {
+  const id = await findInFlightWorkflowRunId(token, userId);
   if (id) useLiveStore.getState().setRun(id);
   return id;
 }
@@ -122,7 +139,8 @@ export function persistAutomationRun(input: {
   sources: AutomationSource[];
   subSources?: SubSourcesSelection;
 }): void {
-  useAutomationSessionStore.getState().save({
+  const userId = currentUserId();
+  useAutomationSessionStore.getState().save(userId, {
     runId: input.runId,
     dealerId: input.dealerId,
     operation: input.operation,
@@ -149,8 +167,14 @@ export async function resumeSavedAutomationSession(
     apiFetch<{ active: boolean }>(`/v1/workflow-runs/${saved.runId}/session-active`, { token }),
   ]);
 
-  if (saved.operation !== "enquiry_transfer") {
-    throw new Error("Only enquiry transfer sessions can be started from a session ID.");
+  const resumePath =
+    saved.operation === "follow_up_skip"
+      ? "resume-session"
+      : saved.operation === "enquiry_transfer"
+        ? "resume-session"
+        : null;
+  if (!resumePath) {
+    throw new Error("This operation cannot be resumed from a session ID.");
   }
 
   if (run.status === "COMPLETED") {

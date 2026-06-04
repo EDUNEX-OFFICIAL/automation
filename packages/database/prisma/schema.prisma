@@ -1,5 +1,7 @@
 generator client {
   provider = "prisma-client-js"
+  /** Monorepo: types always from this package, not a stale hoisted @prisma/client */
+  output   = "../generated/prisma-client"
 }
 
 datasource db {
@@ -9,8 +11,15 @@ datasource db {
 
 enum UserRole {
   SUPER_ADMIN
-  DEALER
-  USER
+  DEALER_ADMIN
+  TEAM_LEADER
+  SALES_CONSULTANT
+}
+
+/** Team Leaders only — Digital runs enquiry transfer; Field does not. */
+enum TeamType {
+  DIGITAL
+  FIELD
 }
 
 enum WorkflowRunStatus {
@@ -43,43 +52,127 @@ enum AndroidDeviceStatus {
 }
 
 model Dealer {
+  id                    String   @id @default(cuid())
+  name                  String
+  isActive              Boolean  @default(true)
+  maxTeamLeaders        Int      @default(10)
+  maxSalesConsultants   Int      @default(50)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  users                 User[]
+  inquiries             Inquiry[]
+  workflows             DealerWorkflow[]
+  runs                  WorkflowRun[]
+  devices               AndroidDevice[]
+  voiceProfiles         VoiceProfile[]
+  automationSettings    DealerAutomationSettings?
+}
+
+/** Per-dealer scheduled automation toggles (e.g. daily Follow Up Skip). */
+model DealerAutomationSettings {
+  id                    String   @id @default(cuid())
+  dealerId              String   @unique
+  dealer                Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  followUpSkipEnabled   Boolean  @default(false)
+  /** Daily start time in IST, 24h "HH:mm" (e.g. "09:30"). */
+  followUpSkipStartTime String?
+  /** Enquiry transfer default remark base (automation appends "..."). */
+  defaultEnquiryRemarkBase String @default("Call Back")
+  /** [{ source, subSource?, remarkBase }] — per source/sub-source overrides. */
+  enquiryRemarkRules       Json   @default("[]")
+  /** Follow-up skip remark bases; one picked at random per row (suffix appended). */
+  followUpSkipRemarkBases  Json   @default("[]")
+  /** Optional Ollama model name for AI calling (Settings). */
+  ollamaModel           String?
+  /** Scheduled daily enquiry transfer (IST HH:mm). */
+  enquiryTransferEnabled   Boolean @default(false)
+  enquiryTransferStartTime String?
+  /** Last scheduled follow-up skip run id (for Settings UI). */
+  lastScheduledRunId    String?
+  lastScheduledRunAt    DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  dealerId    String?
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([dealerId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  readAt    DateTime?
+  payload   Json?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model WorkflowRunLog {
   id        String   @id @default(cuid())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  users     User[]
-  gdms      GdmsAccount?
-  inquiries Inquiry[]
-  workflows DealerWorkflow[]
-  runs      WorkflowRun[]
-  devices   AndroidDevice[]
-  voiceProfiles VoiceProfile[]
+  runId     String
+  level     String
+  message   String
+  ts        DateTime @default(now())
+
+  @@index([runId, ts])
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  passwordHash  String
-  role          UserRole
-  dealerId      String?
-  dealer        Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
-  tokenVersion  Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  voiceProfiles VoiceProfile[]
+  id              String    @id @default(cuid())
+  username        String    @unique
+  /** Shown in UI; defaults to username if empty */
+  displayName     String?
+  /** Public URL or /uploads/avatars/{id}.ext served by API */
+  avatarUrl       String?
+  /** Internal / legacy; login uses username only */
+  email           String    @unique
+  passwordHash    String
+  role            UserRole
+  dealerId        String?
+  dealer          Dealer?   @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  reportsToUserId String?
+  reportsTo       User?     @relation("TeamHierarchy", fields: [reportsToUserId], references: [id], onDelete: SetNull)
+  directReports   User[]    @relation("TeamHierarchy")
+  /** Set when role is TEAM_LEADER. SC inherits via reportsTo. */
+  teamType        TeamType?
+  isActive        Boolean   @default(true)
+  tokenVersion    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  voiceProfiles   VoiceProfile[]
+  gdmsAccount     GdmsAccount?
+
+  @@index([dealerId, role])
+  @@index([reportsToUserId])
 }
 
+/** One GDMS login per user (each TL / SC has their own credentials). */
 model GdmsAccount {
-  id                 String   @id @default(cuid())
-  dealerId           String   @unique
-  dealer             Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
-  usernameCipher     String
-  passwordCipher     String
-  keyVersion         String   @default("v1")
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usernameCipher      String
+  passwordCipher      String
+  keyVersion          String   @default("v1")
   usernameFingerprint String
-  lastVerifiedAt     DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  lastVerifiedAt      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 model DealerWorkflow {
@@ -132,6 +225,7 @@ model WorkflowRun {
   id               String              @id @default(cuid())
   dealerId         String
   dealer           Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  startedByUserId  String?
   status           WorkflowRunStatus   @default(PENDING)
   currentStep      String?
   runParams        Json?
@@ -156,7 +250,6 @@ model AiCall {
   voiceProfileId   String?
   voiceProfile     VoiceProfile?    @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
   outcome          String?
-  /** Last SIM / telephony phase reported by Android gateway */
   lastCallPhase    String?
   callEndedAt      DateTime?
   createdAt        DateTime         @default(now())
@@ -183,7 +276,6 @@ model AndroidDevice {
   dealer          Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
   deviceId        String              @unique
   pairingCodeHash String
-  /** bcrypt hash; empty until device completes pairing (Phase 2) */
   socketTokenHash String              @default("")
   status          AndroidDeviceStatus @default(OFFLINE)
   capabilities    Json?

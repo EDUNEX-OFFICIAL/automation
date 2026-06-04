@@ -6,13 +6,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SettingsTabs } from "@/components/settings-tabs";
+import { PageHeader } from "@/components/ui/page-header";
 import { GdmsSavedCredentials } from "@/components/gdms-saved-credentials";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { apiFetch } from "@/lib/api";
 import type { GdmsAccountSummary } from "@/lib/gdms-account";
 import { toUserMessage } from "@/lib/user-messages";
+import { signOut as authSignOut } from "@/lib/auth-session";
 import { useAuthStore } from "@/stores/auth-store";
 import type { UserInfo } from "@/stores/auth-store";
+import {
+  RemarkSettingsCards,
+  type RemarkSettingsFormState,
+} from "@/components/remark-settings-cards";
+import type {
+  DealerAutomationSettingsPayload,
+  DealerAutomationSettingsResponse,
+} from "@gdms/shared";
 
 async function resolveDealerIdForUser(token: string, user: UserInfo): Promise<string> {
   let list = await apiFetch<{ id: string; name: string }[]>("/v1/dealers", { token });
@@ -32,13 +43,12 @@ export default function SettingsPage() {
   const token = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const syncUserFromApi = useAuthStore((s) => s.syncUserFromApi);
-  const storeLogout = useAuthStore((s) => s.logout);
 
   const [dealerId, setDealerId] = useState("");
-  const [dealers, setDealers] = useState<{ id: string; name: string }[]>([]);
   const [gdmsAccounts, setGdmsAccounts] = useState<GdmsAccountSummary[]>([]);
   const [gdmsListLoading, setGdmsListLoading] = useState(false);
   const [bootstrapPending, setBootstrapPending] = useState(false);
+  const [editUserId, setEditUserId] = useState("");
   const [gdmsUser, setGdmsUser] = useState("");
   const [gdmsPass, setGdmsPass] = useState("");
   const [workflowName, setWorkflowName] = useState("gdms_login");
@@ -49,6 +59,20 @@ export default function SettingsPage() {
   const [pairMsg, setPairMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [ollamaModel, setOllamaModel] = useState("llama3.2");
+  const [followUpSkipEnabled, setFollowUpSkipEnabled] = useState(false);
+  const [followUpSkipStartTime, setFollowUpSkipStartTime] = useState("09:00");
+  const [automationSettingsOk, setAutomationSettingsOk] = useState(false);
+  const [automationSettingsSaving, setAutomationSettingsSaving] = useState(false);
+  const [canEditRemarks, setCanEditRemarks] = useState(false);
+  const [remarkSettings, setRemarkSettings] = useState<RemarkSettingsFormState>({
+    defaultEnquiryRemarkBase: "Call Back",
+    enquiryRemarkRules: [],
+    followUpSkipRemarkBases: [],
+  });
+  const [settingsTab, setSettingsTab] = useState("gdms");
+
+  const showRemarkSettings =
+    user?.role === "TEAM_LEADER" || user?.role === "DEALER_ADMIN";
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -70,14 +94,40 @@ export default function SettingsPage() {
           syncUserFromApi(u);
         }
         const id = await resolveDealerIdForUser(token, u);
-        const dealerList = await apiFetch<{ id: string; name: string }[]>("/v1/dealers", { token });
-        if (cancelled) return;
-        setDealers(dealerList);
         if (cancelled) return;
         setDealerId(id);
         if (!id)
           setErrMsg("We couldn't set up your dealer. Refresh the page or contact your administrator.");
-        else await refreshGdmsList(token, cancelled);
+        else {
+          if (u.role === "TEAM_LEADER" || u.role === "SALES_CONSULTANT") {
+            setEditUserId(u.id);
+          }
+          const list = await refreshGdmsList(token, cancelled);
+          if (!cancelled && u.role === "DEALER_ADMIN" && list.length > 0) {
+            setEditUserId((prev) => prev || list[0]!.userId);
+          }
+          if (id && !cancelled) {
+            try {
+              const settings = await apiFetch<DealerAutomationSettingsResponse>(
+                `/v1/dealers/${id}/automation-settings`,
+                { token },
+              );
+              if (!cancelled) {
+                setFollowUpSkipEnabled(settings.followUpSkipEnabled);
+                setFollowUpSkipStartTime(settings.followUpSkipStartTime ?? "09:00");
+                setOllamaModel(settings.ollamaModel ?? "llama3.2");
+                setCanEditRemarks(settings.canEditRemarks);
+                setRemarkSettings({
+                  defaultEnquiryRemarkBase: settings.defaultEnquiryRemarkBase,
+                  enquiryRemarkRules: settings.enquiryRemarkRules,
+                  followUpSkipRemarkBases: settings.followUpSkipRemarkBases,
+                });
+              }
+            } catch {
+              /* optional */
+            }
+          }
+        }
       } catch (e) {
         if (!cancelled) setErrMsg(toUserMessage(e, "generic"));
       } finally {
@@ -90,13 +140,15 @@ export default function SettingsPage() {
     };
   }, [token, user, syncUserFromApi]);
 
-  async function refreshGdmsList(tk: string, cancelled?: boolean): Promise<void> {
+  async function refreshGdmsList(tk: string, cancelled?: boolean): Promise<GdmsAccountSummary[]> {
     setGdmsListLoading(true);
     try {
       const list = await apiFetch<GdmsAccountSummary[]>("/v1/gdms-accounts", { token: tk });
       if (!cancelled) setGdmsAccounts(list);
+      return list;
     } catch (e) {
       if (!cancelled) setErrMsg(toUserMessage(e, "generic"));
+      return [];
     } finally {
       if (!cancelled) setGdmsListLoading(false);
     }
@@ -129,19 +181,24 @@ export default function SettingsPage() {
         return;
       }
 
+      const targetUserId =
+        user.role === "DEALER_ADMIN" ? editUserId || user.id : user.id;
+      if (!targetUserId) {
+        setErrMsg("Select a team member to set GDMS credentials for.");
+        return;
+      }
+
       const saved = await apiFetch<GdmsAccountSummary & { id: string }>("/v1/gdms-account", {
         method: "PUT",
         token: tk,
         body: JSON.stringify({
-          dealerId: id,
+          userId: targetUserId,
           username: gdmsUser.trim(),
           password: gdmsPass.trim(),
         }),
       });
-      setGdmsAccounts((prev) => {
-        const next = prev.filter((a) => a.dealerId !== saved.dealerId);
-        return [...next, saved].sort((a, b) => a.dealerName.localeCompare(b.dealerName));
-      });
+      await refreshGdmsList(tk);
+      setEditUserId(saved.userId);
       setGdmsSaveOk(true);
       setGdmsPass("");
       setGdmsUser("");
@@ -178,15 +235,74 @@ export default function SettingsPage() {
     }
   }
 
-  async function signOut(): Promise<void> {
+  async function handleSignOut(): Promise<void> {
     setErrMsg(null);
-    try {
-      await apiFetch("/v1/auth/logout", { method: "POST" });
-    } catch {
-      /* cookie clear best-effort */
-    }
-    storeLogout();
+    await authSignOut();
     router.replace("/login");
+  }
+
+  async function saveAutomationSettings(): Promise<void> {
+    setErrMsg(null);
+    setAutomationSettingsOk(false);
+    const tk = token;
+    if (!tk || !dealerId) {
+      setErrMsg("Dealer context missing.");
+      return;
+    }
+    if (followUpSkipEnabled && !followUpSkipStartTime.trim()) {
+      setErrMsg("Set a daily start time for Follow Up Skip (IST).");
+      return;
+    }
+    if (canEditRemarks) {
+      const badRule = remarkSettings.enquiryRemarkRules.find((r) => !r.remarkBase.trim());
+      if (badRule) {
+        setErrMsg("Fill in every enquiry remark rule or remove empty rows.");
+        return;
+      }
+      const badSkip = remarkSettings.followUpSkipRemarkBases.find((b) => !b.trim());
+      if (badSkip) {
+        setErrMsg("Fill in every Follow Up Skip remark or remove empty rows.");
+        return;
+      }
+    }
+    setAutomationSettingsSaving(true);
+    try {
+      const payload: DealerAutomationSettingsPayload = {
+        followUpSkipEnabled,
+        followUpSkipStartTime: followUpSkipEnabled ? followUpSkipStartTime.trim() : null,
+        ollamaModel: ollamaModel.trim() || null,
+      };
+      if (canEditRemarks) {
+        payload.defaultEnquiryRemarkBase = remarkSettings.defaultEnquiryRemarkBase;
+        payload.enquiryRemarkRules = remarkSettings.enquiryRemarkRules;
+        payload.followUpSkipRemarkBases = remarkSettings.followUpSkipRemarkBases.filter(
+          (b) => b.trim().length > 0,
+        );
+      }
+      const saved = await apiFetch<
+        DealerAutomationSettingsResponse & { stoppedRunIds?: string[] }
+      >(`/v1/dealers/${dealerId}/automation-settings`, {
+        method: "PUT",
+        token: tk,
+        body: JSON.stringify(payload),
+      });
+      setRemarkSettings({
+        defaultEnquiryRemarkBase: saved.defaultEnquiryRemarkBase,
+        enquiryRemarkRules: saved.enquiryRemarkRules,
+        followUpSkipRemarkBases: saved.followUpSkipRemarkBases,
+      });
+      setAutomationSettingsOk(true);
+      setPairMsg(null);
+      if (!followUpSkipEnabled && (saved.stoppedRunIds?.length ?? 0) > 0) {
+        setPairMsg(
+          `Follow Up Skip disabled — force-stopped ${saved.stoppedRunIds!.length} running automation(s).`,
+        );
+      }
+    } catch (e) {
+      setErrMsg(toUserMessage(e, "generic"));
+    } finally {
+      setAutomationSettingsSaving(false);
+    }
   }
 
   async function pairAndroid(): Promise<void> {
@@ -218,84 +334,159 @@ export default function SettingsPage() {
   if (!user) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-zinc-600">
-          {bootstrapPending ? "Loading session…" : "Could not load your profile. See the error below or sign in again."}
-        </p>
-        {errMsg && <p className="text-sm text-red-600">{errMsg}</p>}
+        <PageHeader title="Settings" />
+        {errMsg ? <p className="text-sm text-destructive">{errMsg}</p> : null}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+    <>
+      <PageHeader title="Settings" eyebrow="Configuration" />
 
-      <GdmsSavedCredentials
-        accounts={gdmsAccounts}
-        loading={gdmsListLoading || bootstrapPending}
-        selectedDealerId={dealerId}
-        onSelectDealer={
-          user.role === "SUPER_ADMIN" && dealers.length > 1 ? (id) => setDealerId(id) : undefined
-        }
+      <SettingsTabs
+        active={settingsTab}
+        onChange={setSettingsTab}
+        tabs={[
+          { id: "gdms", label: "GDMS" },
+          { id: "schedule", label: "Schedule" },
+          ...(showRemarkSettings ? [{ id: "remarks", label: "Remarks" }] : []),
+          { id: "workflows", label: "Workflows" },
+          { id: "ai", label: "AI calling" },
+        ]}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>GDMS account</CardTitle>
-        </CardHeader>
-        <CardContent className="max-w-xl space-y-3">
-          {bootstrapPending && (
-            <p className="text-xs text-zinc-500">Loading dealer context…</p>
-          )}
-          {user.role === "SUPER_ADMIN" && dealers.length > 1 && (
-            <div>
-              <Label>Dealer</Label>
-              <select
-                className="mt-1 w-full rounded border border-zinc-200 px-2 py-2 text-sm"
-                value={dealerId}
-                onChange={(e) => setDealerId(e.target.value)}
-              >
-                {dealers.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div>
-            <Label>GDMS username</Label>
-            <Input value={gdmsUser} onChange={(e) => setGdmsUser(e.target.value)} />
-          </div>
-          <div>
-            <Label>GDMS password</Label>
-            <Input type="password" value={gdmsPass} onChange={(e) => setGdmsPass(e.target.value)} />
-          </div>
-          {gdmsSaveOk && (
-            <StatusBanner variant="success" title="Credentials saved">
-              Your GDMS login is stored securely. You can start automation from the Dashboard.
-            </StatusBanner>
-          )}
-          {errMsg && (
-            <StatusBanner variant="error" title="Could not save">
-              {errMsg}
-            </StatusBanner>
-          )}
-          <Button
-            disabled={bootstrapPending || !dealerId || gdmsSaving}
-            onClick={() => void saveGdms()}
-          >
-            {gdmsSaving ? "Saving…" : gdmsSaveOk ? "Saved — update again" : "Save credentials"}
-          </Button>
-          {!bootstrapPending && !dealerId && (
-            <p className="text-xs text-amber-700">
-              Dealer context is missing. Refresh the page or sign in again.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      {(user.role === "DEALER_ADMIN" ||
+        user.role === "TEAM_LEADER" ||
+        user.role === "SALES_CONSULTANT") && (
+        <>
+          {(settingsTab === "gdms" || settingsTab === "schedule" || settingsTab === "remarks") && (
+          <>
+          {settingsTab === "gdms" ? (
+          <>
+          <GdmsSavedCredentials
+            accounts={gdmsAccounts}
+            loading={gdmsListLoading || bootstrapPending}
+            selectedUserId={editUserId}
+            onSelectUser={
+              user.role === "DEALER_ADMIN"
+                ? (uid) => {
+                    setEditUserId(uid);
+                    setGdmsSaveOk(false);
+                  }
+                : undefined
+            }
+            title={
+              user.role === "DEALER_ADMIN"
+                ? "Team GDMS credentials"
+                : "Your GDMS credentials"
+            }
+          />
 
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                {user.role === "DEALER_ADMIN" && editUserId
+                  ? `GDMS login — ${
+                      gdmsAccounts.find((a) => a.userId === editUserId)?.username ?? "team member"
+                    }`
+                  : "Your GDMS login"}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="max-w-xl space-y-3">
+              <div>
+                <Label htmlFor="gdms-portal-username">GDMS username</Label>
+                <Input
+                  id="gdms-portal-username"
+                  suppressAutofill
+                  autofillFieldKey="gdms-portal-username"
+                  value={gdmsUser}
+                  onChange={(e) => setGdmsUser(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="gdms-portal-password">GDMS password</Label>
+                <Input
+                  id="gdms-portal-password"
+                  type="password"
+                  suppressAutofill
+                  autofillFieldKey="gdms-portal-password"
+                  value={gdmsPass}
+                  onChange={(e) => setGdmsPass(e.target.value)}
+                />
+              </div>
+              {gdmsSaveOk && (
+                <StatusBanner variant="success" title="Credentials saved" />
+              )}
+              {errMsg && (
+                <StatusBanner variant="error" title="Could not save">
+                  {errMsg}
+                </StatusBanner>
+              )}
+              <Button
+                disabled={bootstrapPending || gdmsSaving || (user.role === "DEALER_ADMIN" && !editUserId)}
+                onClick={() => void saveGdms()}
+              >
+                {gdmsSaving ? "Saving…" : gdmsSaveOk ? "Saved — update again" : "Save credentials"}
+              </Button>
+            </CardContent>
+          </Card>
+          </>
+          ) : null}
+
+          {settingsTab === "remarks" && showRemarkSettings ? (
+            <RemarkSettingsCards
+              value={remarkSettings}
+              onChange={setRemarkSettings}
+              disabled={bootstrapPending || automationSettingsSaving}
+            />
+          ) : null}
+
+          {settingsTab === "schedule" ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Follow Up Skip (Today&apos;s Follow Up)</CardTitle>
+            </CardHeader>
+            <CardContent className="max-w-xl space-y-4">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="rounded border-border"
+                  checked={followUpSkipEnabled}
+                  onChange={(e) => setFollowUpSkipEnabled(e.target.checked)}
+                />
+                Follow Up Skip enabled
+              </label>
+              {followUpSkipEnabled ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="follow-up-skip-time">Daily start time (IST, 24h)</Label>
+                  <Input
+                    id="follow-up-skip-time"
+                    type="time"
+                    value={followUpSkipStartTime}
+                    onChange={(e) => setFollowUpSkipStartTime(e.target.value)}
+                  />
+                </div>
+              ) : null}
+              {automationSettingsOk ? (
+                <StatusBanner variant="success" title="Automation settings saved" />
+              ) : null}
+              <Button
+                disabled={bootstrapPending || !dealerId || automationSettingsSaving}
+                onClick={() => void saveAutomationSettings()}
+              >
+                {automationSettingsSaving ? "Saving…" : "Save automation settings"}
+              </Button>
+            </CardContent>
+          </Card>
+          ) : null}
+          </>
+          )}
+        </>
+      )}
+
+      {user.role === "DEALER_ADMIN" && settingsTab === "workflows" && (
+      <>
       <Card>
         <CardHeader>
           <CardTitle>Workflow JSON (versioned)</CardTitle>
@@ -306,30 +497,33 @@ export default function SettingsPage() {
             <Input value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
           </div>
           <textarea
-            className="min-h-[180px] w-full rounded border border-zinc-200 p-2 font-mono text-xs"
+            className="min-h-[180px] w-full rounded-lg border border-input bg-muted/30 p-3 font-mono text-xs"
             value={workflowJson}
             onChange={(e) => setWorkflowJson(e.target.value)}
           />
-          {workflowSaveOk && (
-            <StatusBanner variant="success" title="Workflow saved">
-              Your workflow definition was stored for this dealer.
-            </StatusBanner>
-          )}
+          {workflowSaveOk && <StatusBanner variant="success" title="Workflow saved" />}
           <Button variant="outline" disabled={bootstrapPending || !dealerId} onClick={() => void saveWorkflow()}>
             Save workflow
           </Button>
         </CardContent>
       </Card>
+      </>
+      )}
 
+      {user.role === "DEALER_ADMIN" && settingsTab === "ai" && (
+      <>
       <Card>
         <CardHeader>
-          <CardTitle>AI calling (Ollama model hint)</CardTitle>
+          <CardTitle>AI calling (Ollama model)</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <Input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} />
-          <p className="mt-2 text-xs text-zinc-500">
-            The ai-service uses OLLAMA_MODEL on the server. This field is for reference only.
-          </p>
+          <Button
+            disabled={bootstrapPending || !dealerId || automationSettingsSaving}
+            onClick={() => void saveAutomationSettings()}
+          >
+            Save AI settings
+          </Button>
         </CardContent>
       </Card>
 
@@ -343,16 +537,15 @@ export default function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+      </>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle>Session</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          <p className="text-xs text-zinc-500">
-            Long-lived access tokens and refresh cookies keep you signed in. Sign out from here.
-          </p>
-          <Button variant="outline" onClick={() => void signOut()}>
+          <Button variant="outline" onClick={() => void handleSignOut()}>
             Sign out
           </Button>
         </CardContent>
@@ -363,6 +556,6 @@ export default function SettingsPage() {
           {pairMsg}
         </StatusBanner>
       )}
-    </div>
+    </>
   );
 }

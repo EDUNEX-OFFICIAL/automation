@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Prisma } from "@prisma/client";
+import type { Prisma } from "@gdms/database";
 import { z } from "zod";
 import { randomBytes, createHash } from "node:crypto";
 import { authPreHandler } from "../lib/auth-pre.js";
