@@ -1,0 +1,35 @@
+# Per-user noVNC websockify ports (enq 6082–6097, fup 6098–6113). Regenerate if GDMS_USER_VNC_SLOTS changes.
+
+handle_path /gdms-browser-enq-u0/* { reverse_proxy automation-playwright:6082 }
+handle_path /gdms-browser-enq-u1/* { reverse_proxy automation-playwright:6083 }
+handle_path /gdms-browser-enq-u2/* { reverse_proxy automation-playwright:6084 }
+handle_path /gdms-browser-enq-u3/* { reverse_proxy automation-playwright:6085 }
+handle_path /gdms-browser-enq-u4/* { reverse_proxy automation-playwright:6086 }
+handle_path /gdms-browser-enq-u5/* { reverse_proxy automation-playwright:6087 }
+handle_path /gdms-browser-enq-u6/* { reverse_proxy automation-playwright:6088 }
+handle_path /gdms-browser-enq-u7/* { reverse_proxy automation-playwright:6089 }
+handle_path /gdms-browser-enq-u8/* { reverse_proxy automation-playwright:6090 }
+handle_path /gdms-browser-enq-u9/* { reverse_proxy automation-playwright:6091 }
+handle_path /gdms-browser-enq-u10/* { reverse_proxy automation-playwright:6092 }
+handle_path /gdms-browser-enq-u11/* { reverse_proxy automation-playwright:6093 }
+handle_path /gdms-browser-enq-u12/* { reverse_proxy automation-playwright:6094 }
+handle_path /gdms-browser-enq-u13/* { reverse_proxy automation-playwright:6095 }
+handle_path /gdms-browser-enq-u14/* { reverse_proxy automation-playwright:6096 }
+handle_path /gdms-browser-enq-u15/* { reverse_proxy automation-playwright:6097 }
+
+handle_path /gdms-browser-fup-u0/* { reverse_proxy automation-playwright:6098 }
+handle_path /gdms-browser-fup-u1/* { reverse_proxy automation-playwright:6099 }
+handle_path /gdms-browser-fup-u2/* { reverse_proxy automation-playwright:6100 }
+handle_path /gdms-browser-fup-u3/* { reverse_proxy automation-playwright:6101 }
+handle_path /gdms-browser-fup-u4/* { reverse_proxy automation-playwright:6102 }
+handle_path /gdms-browser-fup-u5/* { reverse_proxy automation-playwright:6103 }
+handle_path /gdms-browser-fup-u6/* { reverse_proxy automation-playwright:6104 }
+handle_path /gdms-browser-fup-u7/* { reverse_proxy automation-playwright:6105 }
+handle_path /gdms-browser-fup-u8/* { reverse_proxy automation-playwright:6106 }
+handle_path /gdms-browser-fup-u9/* { reverse_proxy automation-playwright:6107 }
+handle_path /gdms-browser-fup-u10/* { reverse_proxy automation-playwright:6108 }
+handle_path /gdms-browser-fup-u11/* { reverse_proxy automation-playwright:6109 }
+handle_path /gdms-browser-fup-u12/* { reverse_proxy automation-playwright:6110 }
+handle_path /gdms-browser-fup-u13/* { reverse_proxy automation-playwright:6111 }
+handle_path /gdms-browser-fup-u14/* { reverse_proxy automation-playwright:6112 }
+handle_path /gdms-browser-fup-u15/* { reverse_proxy automation-playwright:6113 }

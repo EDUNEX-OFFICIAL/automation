@@ -5,6 +5,7 @@ import { workflowQueue, type WorkflowJobData } from "../queue.js";
 import { publishWorkflowEvent } from "../socket.js";
 import { removeStaleBullJob } from "./ensure-workflow-job.js";
 import { reconcileStaleWorkflowRunsForDealer } from "./stale-workflow-run.js";
+import { resolveGdmsUserIdForDealerAutomation } from "./gdms-credentials.js";
 
 const log = createLogger("follow-up-skip-scheduler");
 const prisma = createPrisma();
@@ -46,8 +47,10 @@ export async function enqueueScheduledFollowUpSkip(
     return { ok: false, reason: "Already fired for this schedule today" };
   }
 
-  const gdms = await prisma.gdmsAccount.findUnique({ where: { dealerId } });
-  if (!gdms) return { ok: false, reason: "GDMS account not configured" };
+  const startedByUserId = await resolveGdmsUserIdForDealerAutomation(dealerId);
+  if (!startedByUserId) {
+    return { ok: false, reason: "No Team Leader or SC with GDMS credentials configured" };
+  }
 
   await reconcileStaleWorkflowRunsForDealer(dealerId);
 
@@ -67,6 +70,7 @@ export async function enqueueScheduledFollowUpSkip(
   const run = await prisma.workflowRun.create({
     data: {
       dealerId,
+      startedByUserId,
       status: "PENDING",
       currentStep: "follow_up_skip",
       runParams: { operation: "follow_up_skip", sources: [] },
@@ -76,6 +80,7 @@ export async function enqueueScheduledFollowUpSkip(
   const jobData: WorkflowJobData = {
     runId: run.id,
     dealerId,
+    startedByUserId,
     operation: "follow_up_skip",
     sources: [],
   };

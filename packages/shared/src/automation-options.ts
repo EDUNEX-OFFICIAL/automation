@@ -9,10 +9,10 @@ export const AUTOMATION_OPERATIONS = [
 ] as const;
 
 /** Operations exposed in UI and accepted by the API/worker (others disabled for now). */
-export const ENABLED_AUTOMATION_OPERATIONS = ["enquiry_transfer", "follow_up_skip"] as const;
+export const ENABLED_AUTOMATION_OPERATIONS = ["enquiry_transfer", "follow_up_skip", "follow_up"] as const;
 
 /** Manual START on Dashboard — follow_up_skip is scheduled via Settings only. */
-export const DASHBOARD_MANUAL_OPERATIONS = ["enquiry_transfer"] as const;
+export const DASHBOARD_MANUAL_OPERATIONS = ["enquiry_transfer", "follow_up"] as const;
 
 export type EnabledAutomationOperation = (typeof ENABLED_AUTOMATION_OPERATIONS)[number];
 
@@ -81,7 +81,7 @@ export const automationRunParamsSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.operation === "follow_up_skip") {
+    if (data.operation === "follow_up_skip" || data.operation === "follow_up") {
       return;
     }
     if (data.sources.length < 1) {
@@ -156,6 +156,8 @@ export const startAutomationSchema = z
 export type WorkflowJobData = {
   runId: string;
   dealerId: string;
+  /** User whose GDMS credentials the run uses (TL/SC). */
+  startedByUserId: string;
   operation: AutomationOperation;
   sources: AutomationSource[];
   subSources?: SubSourcesSelection;
@@ -167,7 +169,7 @@ export function isAutomationFormValid(
   subSources: SubSourcesSelection,
 ): boolean {
   if (!operation) return false;
-  if (operation === "follow_up_skip") return true;
+  if (operation === "follow_up_skip" || operation === "follow_up") return true;
   if (sources.length === 0) return false;
   return SUB_SOURCE_PARENTS.every(
     (parent) => !sources.includes(parent) || (subSources[parent]?.length ?? 0) > 0,
@@ -175,5 +177,5 @@ export function isAutomationFormValid(
 }
 
 export function operationNeedsSources(operation: AutomationOperation): boolean {
-  return operation !== "follow_up_skip";
+  return operation !== "follow_up_skip" && operation !== "follow_up";
 }

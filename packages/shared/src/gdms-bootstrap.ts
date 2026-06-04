@@ -1,5 +1,10 @@
-/** Redis key for dealer-scoped GDMS login cookies (BNES_JSESSIONID from DevTools). */
-export function gdmsBootstrapRedisKey(dealerId: string): string {
+/** Redis key for user-scoped GDMS login cookies (BNES_JSESSIONID from DevTools). */
+export function gdmsBootstrapRedisKey(userId: string): string {
+  return `user:${userId}:gdms_bootstrap_cookies`;
+}
+
+/** @deprecated use gdmsBootstrapRedisKey(userId) */
+export function gdmsBootstrapRedisKeyForDealer(dealerId: string): string {
   return `dealer:${dealerId}:gdms_bootstrap_cookies`;
 }
 
@@ -12,7 +17,8 @@ export type GdmsBootstrapCookie = {
   httpOnly?: boolean;
 };
 
-const GDMS_COOKIE_HOST = "ndms.hmil.net";
+/** Parent domain so cookies apply across ndms / dealer GDMS hosts. */
+const GDMS_COOKIE_DOMAIN = ".hmil.net";
 
 export function cookiesFromBnesToken(token: string): GdmsBootstrapCookie[] {
   const value = token.trim();
@@ -20,7 +26,7 @@ export function cookiesFromBnesToken(token: string): GdmsBootstrapCookie[] {
     {
       name: "BNES_JSESSIONID",
       value,
-      domain: GDMS_COOKIE_HOST,
+      domain: GDMS_COOKIE_DOMAIN,
       path: "/",
       httpOnly: true,
       secure: true,
@@ -43,7 +49,7 @@ export function parseGdmsBootstrapInput(raw: string): GdmsBootstrapCookie[] {
       return {
         name: c.name,
         value: c.value,
-        domain: typeof c.domain === "string" ? c.domain : GDMS_COOKIE_HOST,
+        domain: typeof c.domain === "string" ? c.domain : GDMS_COOKIE_DOMAIN,
         path: typeof c.path === "string" ? c.path : "/",
         httpOnly: c.httpOnly === true,
         secure: c.secure !== false,

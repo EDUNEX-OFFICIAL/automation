@@ -18,6 +18,7 @@ type WorkflowRunRow = { id: string; status: string };
 export function useHealAutomationOnRefresh(activeRunId: string | null): void {
   const token = useAuthStore((s) => s.accessToken);
   const dealerId = useAuthStore((s) => s.user?.dealerId);
+  const userId = useAuthStore((s) => s.user?.id);
   const pathname = usePathname();
   const lastHealKeyRef = useRef<string | null>(null);
 
@@ -50,7 +51,7 @@ export function useHealAutomationOnRefresh(activeRunId: string | null): void {
           run.status === "PAUSED_USER" ||
           run.status === "FAILED"
         ) {
-          terminateLiveSessionLocally(dealerId);
+          terminateLiveSessionLocally(userId);
           return;
         }
         if (run.status === "PENDING" && reason === "mount") {
@@ -67,5 +68,5 @@ export function useHealAutomationOnRefresh(activeRunId: string | null): void {
 
     void heal("mount");
 
-  }, [token, dealerId, pathname, activeRunId]);
+  }, [token, dealerId, userId, pathname, activeRunId]);
 }

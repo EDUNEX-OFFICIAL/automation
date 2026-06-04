@@ -1,6 +1,13 @@
-export { PrismaClient } from "@prisma/client";
+export { Prisma, PrismaClient, UserRole } from "../generated/prisma-client/index.js";
+export type {
+  LeadCategory,
+  TeamType,
+  User,
+  WorkflowRun,
+  WorkflowRunStatus,
+} from "../generated/prisma-client/index.js";
 
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma-client/index.js";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 

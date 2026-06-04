@@ -1,11 +1,12 @@
 import jwt, { type SignOptions } from "jsonwebtoken";
 
-export type Role = "SUPER_ADMIN" | "DEALER" | "USER";
+export type Role = "SUPER_ADMIN" | "DEALER_ADMIN" | "TEAM_LEADER" | "SALES_CONSULTANT";
 
 export type AccessTokenPayload = {
   sub: string;
   role: Role;
   dealerId: string | null;
+  username: string;
 };
 
 export type RefreshTokenPayload = {

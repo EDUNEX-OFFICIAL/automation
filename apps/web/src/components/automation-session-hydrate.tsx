@@ -11,45 +11,43 @@ import { useLiveStore } from "@/stores/live-store";
 /** On load, restore in-flight run id only (not stopped/completed). */
 export function AutomationSessionHydrate(): null {
   const token = useAuthStore((s) => s.accessToken);
-  const dealerId = useAuthStore((s) => s.user?.dealerId);
+  const userId = useAuthStore((s) => s.user?.id);
   const hydrated = useAutomationSessionStore.persist?.hasHydrated?.();
 
   useEffect(() => {
-    if (!hydrated || !token) return;
+    if (!hydrated || !token || !userId) return;
     if (useLiveStore.getState().runId) return;
 
     const attachSavedOrInFlight = async (): Promise<void> => {
-      if (dealerId) {
-        const saved = useAutomationSessionStore.getState().get(dealerId);
-        if (saved?.runId) {
-          try {
-            const run = await apiFetch<{ status: string }>(
-              `/v1/workflow-runs/${saved.runId}`,
-              { token },
-            );
-            if (isTerminalRunStatus(run.status)) {
-              terminateLiveSessionLocally(dealerId);
-            } else if (
-              run.status === "RUNNING" ||
-              run.status === "PAUSED_OTP" ||
-              run.status === "PENDING" ||
-              run.status === "PAUSED_USER" ||
-              run.status === "FAILED"
-            ) {
-              useLiveStore.getState().setRun(saved.runId);
-              if (run.status === "PAUSED_OTP") {
-                useLiveStore.getState().openOtp(saved.runId);
-              }
-              return;
-            } else {
-              terminateLiveSessionLocally(dealerId);
+      const saved = useAutomationSessionStore.getState().get(userId);
+      if (saved?.runId) {
+        try {
+          const run = await apiFetch<{ status: string }>(
+            `/v1/workflow-runs/${saved.runId}`,
+            { token },
+          );
+          if (isTerminalRunStatus(run.status)) {
+            terminateLiveSessionLocally(userId);
+          } else if (
+            run.status === "RUNNING" ||
+            run.status === "PAUSED_OTP" ||
+            run.status === "PENDING" ||
+            run.status === "PAUSED_USER" ||
+            run.status === "FAILED"
+          ) {
+            useLiveStore.getState().setRun(saved.runId);
+            if (run.status === "PAUSED_OTP") {
+              useLiveStore.getState().openOtp(saved.runId);
             }
-          } catch {
-            terminateLiveSessionLocally(dealerId);
+            return;
+          } else {
+            terminateLiveSessionLocally(userId);
           }
+        } catch {
+          terminateLiveSessionLocally(userId);
         }
       }
-      await linkLiveSessionToInFlightRun(token).catch(() => undefined);
+      await linkLiveSessionToInFlightRun(token, userId).catch(() => undefined);
       const linked = useLiveStore.getState().runId;
       if (linked) {
         try {
@@ -62,7 +60,7 @@ export function AutomationSessionHydrate(): null {
     };
 
     void attachSavedOrInFlight();
-  }, [hydrated, dealerId, token]);
+  }, [hydrated, userId, token]);
 
   return null;
 }

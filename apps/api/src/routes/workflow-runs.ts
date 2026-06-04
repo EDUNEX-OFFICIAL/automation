@@ -2,11 +2,19 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { authPreHandler } from "../lib/auth-pre.js";
 import { prisma } from "../prisma.js";
-import { canStartWorkflow, canAccessDealer } from "@gdms/auth";
+import {
+  canRunAutomation,
+  canAccessDealer,
+  canRunEnquiryTransfer,
+  canAccessWorkflowRun,
+  workflowRunScopeForActor,
+} from "@gdms/auth";
+import { resolveEffectiveTeamType } from "../lib/team-type.js";
 import { workflowQueue, type WorkflowJobData } from "../queue.js";
 import { setOtpForRun, setControl, isWatchdogActive } from "../redis.js";
 import {
-  GDMS_VNC_WORKSPACE,
+  vncPathPrefixForUserOperation,
+  vncWorkspaceForOperation,
   SocketEvents,
   automationRunParamsSchema,
   isEnabledAutomationOperation,
@@ -36,10 +44,18 @@ import { triggerEnquiryResumeAfterControl } from "../lib/trigger-enquiry-resume.
 const automationBase = () => env.AUTOMATION_SERVICE_URL ?? "http://localhost:4101";
 const automationSecret = () => env.AUTOMATION_INTERNAL_SECRET ?? "dev-internal-secret-change-me";
 
+function runActor(req: { user?: { sub: string; role: string; dealerId: string | null } }) {
+  return {
+    sub: req.user!.sub,
+    role: req.user!.role as import("@gdms/auth").Role,
+    dealerId: req.user!.dealerId ?? null,
+  };
+}
+
 export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<void> {
   app.post("/v1/workflow-runs", { preHandler: authPreHandler }, async (req, reply) => {
-    if (!canStartWorkflow(req.user!.role)) {
-      return reply.code(403).send({ error: "Forbidden" });
+    if (!canRunAutomation(req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden — automation is for Team Leaders and Sales Consultants only" });
     }
     let body: z.infer<typeof startAutomationSchema>;
     try {
@@ -54,11 +70,21 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       return reply.code(403).send({ error: "Forbidden" });
     }
 
+    if (body.operation === "enquiry_transfer") {
+      const teamType = await resolveEffectiveTeamType(req.user!.sub);
+      if (!canRunEnquiryTransfer(teamType)) {
+        return reply.code(403).send({
+          error:
+            "Enquiry transfer is only available for the Digital team. Field team can use Follow up skip from Settings.",
+        });
+      }
+    }
+
     await reconcileStaleWorkflowRunsForDealer(body.dealerId);
 
     const inFlight = await prisma.workflowRun.findFirst({
       where: {
-        dealerId: body.dealerId,
+        ...workflowRunScopeForActor(runActor(req), { dealerId: body.dealerId }),
         status: { in: ["PENDING", "RUNNING", "PAUSED_OTP", "PAUSED_USER"] },
         runParams: { path: ["operation"], equals: body.operation },
       },
@@ -76,7 +102,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       }
       return reply.code(409).send({
         error:
-          "An automation is already running for this dealer. Open Live session and press Stop, or wait for it to finish.",
+          "You already have an automation running for this operation. Open Live session and press Stop, or wait for it to finish.",
         runId: inFlight.id,
         status: inFlight.status,
         startedAt: inFlight.startedAt.toISOString(),
@@ -92,15 +118,25 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     const run = await prisma.workflowRun.create({
       data: {
         dealerId: body.dealerId,
+        startedByUserId: req.user!.sub,
         status: "PENDING",
         currentStep: body.operation,
         runParams: runParams as object,
       },
     });
 
+    const credsUserId = req.user!.sub;
+    const { getGdmsCredentialsForUser } = await import("../lib/gdms-credentials.js");
+    if (!(await getGdmsCredentialsForUser(credsUserId))) {
+      return reply.code(409).send({
+        error: "Save your GDMS credentials in Settings before starting automation.",
+      });
+    }
+
     const jobData: WorkflowJobData = {
       runId: run.id,
       dealerId: body.dealerId,
+      startedByUserId: credsUserId,
       operation: body.operation,
       sources: body.operation === "follow_up_skip" ? [] : body.sources,
       subSources: body.subSources,
@@ -132,10 +168,48 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     if (!canAccessDealer(req.user!.dealerId, dealerId, req.user!.role)) return [];
     await reconcileStaleWorkflowRunsForDealer(dealerId);
     return prisma.workflowRun.findMany({
-      where: { dealerId },
+      where: workflowRunScopeForActor(runActor(req), { dealerId }),
       orderBy: { startedAt: "desc" },
       take: 50,
     });
+  });
+
+  app.get("/v1/workflow-runs/summary", { preHandler: authPreHandler }, async (req, reply) => {
+    const dealerId =
+      (req.query as { dealerId?: string }).dealerId ?? req.user!.dealerId ?? undefined;
+    if (!dealerId) return reply.code(400).send({ error: "dealerId required" });
+    if (!canAccessDealer(req.user!.dealerId, dealerId, req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
+    const scope = workflowRunScopeForActor(runActor(req), { dealerId });
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const [byStatus, recent, inFlight] = await Promise.all([
+      prisma.workflowRun.groupBy({
+        by: ["status"],
+        where: { ...scope, startedAt: { gte: since } },
+        _count: true,
+      }),
+      prisma.workflowRun.findFirst({
+        where: scope,
+        orderBy: { startedAt: "desc" },
+      }),
+      prisma.workflowRun.findFirst({
+        where: {
+          ...scope,
+          status: { in: ["PENDING", "RUNNING", "PAUSED_OTP", "PAUSED_USER"] },
+        },
+        orderBy: { startedAt: "desc" },
+      }),
+    ]);
+
+    return {
+      periodDays: 7,
+      byStatus: byStatus.map((r) => ({ status: r.status, count: r._count })),
+      lastRun: recent,
+      inFlight,
+    };
   });
 
   /** Latest in-flight or paused run (for Live session when admin has no dealerId on JWT). */
@@ -167,9 +241,11 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       runs.find((r) => r.status === "FAILED");
 
     for (const dealerId of dealerIds) {
-      await reconcileStaleWorkflowRunsForDealer(dealerId);
       const runs = await prisma.workflowRun.findMany({
-        where: { dealerId, status: { in: [...activeStatuses] } },
+        where: {
+          ...workflowRunScopeForActor(runActor(req), { dealerId }),
+          status: { in: [...activeStatuses] },
+        },
         orderBy: { startedAt: "desc" },
         take: 15,
       });
@@ -195,8 +271,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
   app.get<{ Params: { id: string } }>("/v1/workflow-runs/:id", { preHandler: authPreHandler }, async (req, reply) => {
     const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
     if (!run) return reply.code(404).send({ error: "Not found" });
-    if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-      return reply.code(403).send({ error: "Forbidden" });
+    if (!canAccessWorkflowRun(runActor(req), run)) {
+      return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
     }
     const healed = await healWorkflowRunOnRead(run);
     const liveLogs = await getRunLogBuffer(healed.id);
@@ -209,8 +285,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     async (req, reply) => {
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
       if (run.status !== "PENDING") {
         return reply.code(409).send({ error: "Only queued runs can be re-queued." });
@@ -229,8 +305,11 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     const otp = z.object({ otp: z.string().min(4) }).parse(req.body).otp;
     const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
     if (!run) return reply.code(404).send({ error: "Not found" });
-    if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-      return reply.code(403).send({ error: "Forbidden" });
+    if (!canAccessWorkflowRun(runActor(req), run)) {
+      return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
+    }
+    if (run.status !== "PAUSED_OTP" && run.status !== "RUNNING") {
+      return reply.code(409).send({ error: "This run is not waiting for OTP." });
     }
     await setOtpForRun(run.id, otp, run.dealerId);
     void fetch(`${automationBase()}/internal/notify-otp/${run.id}`, {
@@ -249,8 +328,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
         .parse(req.body);
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
       const pauseMsg =
         "Paused from Live session — press Resume when you are ready to continue.";
@@ -358,8 +437,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     async (req, reply) => {
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
       if (run.status !== "RUNNING" && run.status !== "COMPLETED") {
         return reply.code(409).send({ error: "Run is not in live preview" });
@@ -381,8 +460,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     async (req, reply) => {
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
 
       const params = automationRunParamsSchema.safeParse(run.runParams);
@@ -415,7 +494,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
 
       const otherInFlight = await prisma.workflowRun.findFirst({
         where: {
-          dealerId: run.dealerId,
+          ...workflowRunScopeForActor(runActor(req), { dealerId: run.dealerId }),
           id: { not: run.id },
           status: { in: ["PENDING", "RUNNING", "PAUSED_OTP"] },
           runParams: { path: ["operation"], equals: params.data.operation },
@@ -424,14 +503,17 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       if (otherInFlight) {
         return reply.code(409).send({
           error:
-            "Another automation is already running for this dealer. Stop it first, then resume this session.",
+            "You already have another automation running for this operation. Stop it first, then resume this session.",
           runId: otherInFlight.id,
         });
       }
 
-      const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId: run.dealerId } });
+      if (!run.startedByUserId) {
+        return reply.code(409).send({ error: "This run has no linked user for GDMS credentials." });
+      }
+      const acc = await prisma.gdmsAccount.findUnique({ where: { userId: run.startedByUserId } });
       if (!acc) {
-        return reply.code(409).send({ error: "GDMS account not configured for this dealer." });
+        return reply.code(409).send({ error: "GDMS credentials not configured for this user." });
       }
 
       const parseEnc = (stored: string): EncryptedPayload => JSON.parse(stored) as EncryptedPayload;
@@ -467,6 +549,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
         body: JSON.stringify({
           runId: run.id,
           dealerId: run.dealerId,
+          startedByUserId: run.startedByUserId,
           gdmsUsername: username,
           gdmsPassword: password,
           loginWorkflow,
@@ -489,8 +572,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     async (req, reply) => {
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
       if (
         run.status !== "FAILED" &&
@@ -533,8 +616,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     async (req, reply) => {
       const run = await prisma.workflowRun.findUnique({ where: { id: req.params.id } });
       if (!run) return reply.code(404).send({ error: "Not found" });
-      if (!canAccessDealer(req.user!.dealerId, run.dealerId, req.user!.role)) {
-        return reply.code(403).send({ error: "Forbidden" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
       }
       const res = await fetch(`${automationBase()}/internal/session-active/${run.id}`, {
         headers: { "x-internal-secret": automationSecret() },
@@ -554,9 +637,26 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     }
     const siteOrigin = env.CORS_ORIGIN.split(",")[0]?.trim() ?? "https://bot.edunexservices.in";
     const password = env.GDMS_VNC_PASSWORD ?? "gdms";
-    const query = req.query as { workspace?: string };
+    const query = req.query as { workspace?: string; runId?: string };
     const workspaceId =
       query.workspace === "2" ? 2 : query.workspace === "1" ? 1 : undefined;
+
+    let viewUserId = req.user!.sub;
+    let operation = workspaceId === 2 ? "follow_up_skip" : "enquiry_transfer";
+
+    if (query.runId) {
+      const run = await prisma.workflowRun.findUnique({ where: { id: query.runId } });
+      if (!run) return reply.code(404).send({ error: "Run not found" });
+      if (!canAccessWorkflowRun(runActor(req), run)) {
+        return reply.code(403).send({ error: "Forbidden — this run belongs to another user" });
+      }
+      if (!run.startedByUserId) {
+        return reply.code(409).send({ error: "Run has no owner for browser view" });
+      }
+      viewUserId = run.startedByUserId;
+      const params = automationRunParamsSchema.safeParse(run.runParams);
+      if (params.success) operation = params.data.operation;
+    }
 
     const buildUrl = (pathPrefix: string): string => {
       const q = new URLSearchParams({
@@ -569,29 +669,32 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       return `${siteOrigin}/${pathPrefix}/vnc.html?${q.toString()}`;
     };
 
+    const pathForUser = (op: string) => vncPathPrefixForUserOperation(viewUserId, op);
+
     const workspaces = ([1, 2] as const).map((id) => {
-      const ws = GDMS_VNC_WORKSPACE[id];
+      const op = id === 2 ? "follow_up_skip" : "enquiry_transfer";
+      const pathPrefix = pathForUser(op);
       return {
-        id: ws.id,
-        label: ws.label,
-        pathPrefix: ws.pathPrefix,
-        url: buildUrl(ws.pathPrefix),
+        id,
+        label: id === 2 ? "Follow Up Skip" : "Enquiry transfer",
+        pathPrefix,
+        url: buildUrl(pathPrefix),
       };
     });
 
-    if (workspaceId) {
-      const ws = GDMS_VNC_WORKSPACE[workspaceId];
-      return {
-        enabled: true,
-        workspace: workspaceId,
-        url: buildUrl(ws.pathPrefix),
-        workspaces,
-      };
-    }
+    const opForWorkspace =
+      workspaceId != null
+        ? workspaceId === 2
+          ? "follow_up_skip"
+          : "enquiry_transfer"
+        : operation;
+    const primaryPrefix = pathForUser(opForWorkspace);
 
     return {
       enabled: true,
-      url: buildUrl(GDMS_VNC_WORKSPACE[1].pathPrefix),
+      workspace: workspaceId ?? vncWorkspaceForOperation(operation),
+      url: buildUrl(primaryPrefix),
+      pathPrefix: primaryPrefix,
       workspaces,
     };
   });

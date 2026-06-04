@@ -1,9 +1,20 @@
 import type { Redis } from "ioredis";
 import type { Page, Locator } from "playwright";
 import type { LogLinePayload } from "@gdms/shared";
+import {
+  formatAutomationRemark,
+  isAutomationRemarkFilled,
+  pickRandomFollowUpRemark,
+  resolveEnquiryRemarkBase,
+  type DealerRemarkConfig,
+} from "@gdms/shared";
 import { applyInputGuardToPage, setAutomationInputBypass } from "./automation-browser-setup.js";
 import { env } from "./config.js";
-import { pickNextSalesConsultant } from "./consultant-rotation.js";
+import { createPrisma } from "@gdms/database";
+import { pickNextSalesConsultant, type ConsultantRotationState } from "./consultant-rotation.js";
+import { incrementRunMetric } from "./run-metrics.js";
+
+const prisma = createPrisma();
 import {
   humanDelay,
   humanHoverClick,
@@ -34,7 +45,6 @@ import {
 export { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 
 const PIN_CODES = ["800001", "800006", "800020", "800026"] as const;
-const FOLLOW_UP_REMARKS = "Call Back...";
 /** Follow Up tab required field (GDMS shows "*Enquiry Type"). */
 const ENQUIRY_TYPE_LABEL_RE = /^\*?\s*Enquiry\s*Type\s*$/i;
 /** Random pause after Follow Up data complete, before #btnFollowUpSave (max 4s). */
@@ -78,15 +88,34 @@ export type EnquiryTransferContext = {
   page: Page;
   runId: string;
   dealerId: string;
+  /** User who started the run — rotation uses their TL's active SCs (reportsTo). */
+  startedByUserId: string;
+  /** Filled on first round-robin pick for this run (TL's SC list). */
+  rotation?: ConsultantRotationState;
   redis: Redis;
   sources: string[];
   subSources?: Record<string, string[]>;
+  remarkConfig: Pick<DealerRemarkConfig, "defaultEnquiryRemarkBase" | "enquiryRemarkRules">;
   log: (level: LogLinePayload["level"], message: string) => Promise<void>;
   shouldStop: () => Promise<boolean>;
   waitIfPaused: () => Promise<void>;
   /** Persist PAUSED_USER + socket event; always throws ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE */
   signalManualIntervention: (message: string) => Promise<never>;
 };
+
+async function resolveEnquiryFollowUpRemark(
+  page: Page,
+  ctx: EnquiryTransferContext,
+): Promise<string> {
+  const opened = await readEnquirySourceFieldsFromModal(page).catch(() => null);
+  const base = resolveEnquiryRemarkBase(
+    ctx.remarkConfig.enquiryRemarkRules,
+    ctx.remarkConfig.defaultEnquiryRemarkBase,
+    opened?.source ?? "",
+    opened?.subSource,
+  );
+  return formatAutomationRemark(base);
+}
 
 function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -2276,7 +2305,7 @@ async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
   try {
     const remarks = await resolveFollowUpRemarksInput(formRoot);
     const t = (await remarks.inputValue().catch(() => "")).trim();
-    return t.includes("Call Back");
+    return isAutomationRemarkFilled(t);
   } catch {
     return false;
   }
@@ -2405,17 +2434,18 @@ async function isBasicInfoTransferFieldsFilled(modal: Locator): Promise<boolean>
 
 async function applyRotatingSalesConsultant(
   modal: Locator,
-  log: EnquiryTransferContext["log"],
-  redis: Redis,
-  dealerId: string,
+  ctx: EnquiryTransferContext,
 ): Promise<void> {
-  const consultant = await pickNextSalesConsultant(redis, dealerId);
+  const { log } = ctx;
+  const consultant = await pickNextSalesConsultant(prisma, ctx.redis, ctx);
+  const pool = ctx.rotation?.consultants.length ?? 0;
+  const tlNote = ctx.rotation ? ` (TL team, ${pool} SC${pool === 1 ? "" : "s"})` : "";
   await ensureBasicInfoTabActive(modal);
   await scrollKendoFieldIntoView(modal, /Sales Consultant/i);
   const before = (await readDropdownDisplayNearLabel(modal, /Sales Consultant/i)).trim();
   await log(
     "info",
-    `Sales Consultant round-robin → ${consultant}${before ? ` (was "${before}")` : ""}.`,
+    `Sales Consultant round-robin → ${consultant}${tlNote}${before ? ` (was "${before}")` : ""}.`,
   );
   await selectSalesConsultant(modal, consultant);
   const after = (await readDropdownDisplayNearLabel(modal, /Sales Consultant/i)).trim();
@@ -2427,12 +2457,8 @@ async function applyRotatingSalesConsultant(
   await log("info", `Sales Consultant set: ${consultant}.`);
 }
 
-async function fillBasicInfoAfterPin(
-  page: Page,
-  log: EnquiryTransferContext["log"],
-  redis: Redis,
-  dealerId: string,
-): Promise<Locator> {
+async function fillBasicInfoAfterPin(page: Page, ctx: EnquiryTransferContext): Promise<Locator> {
+  const { log } = ctx;
   const modal = await resolveMainEnquiryBasicInfoModal(page, log);
 
   if (await isBasicInfoTransferFieldsFilled(modal)) {
@@ -2440,7 +2466,7 @@ async function fillBasicInfoAfterPin(
       "info",
       "Basic Info already has PIN / TD Offer / Reason — still updating Sales Consultant (round-robin).",
     );
-    await applyRotatingSalesConsultant(modal, log, redis, dealerId);
+    await applyRotatingSalesConsultant(modal, ctx);
     return modal;
   }
 
@@ -2472,7 +2498,7 @@ async function fillBasicInfoAfterPin(
     }
   }
 
-  await applyRotatingSalesConsultant(modal, log, redis, dealerId);
+  await applyRotatingSalesConsultant(modal, ctx);
   await log("info", "Basic Info fields done — clicking Save (#btnBasicSave) next.");
   return modal;
 }
@@ -3229,19 +3255,20 @@ async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> 
   throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
 }
 
-/** Follow Up Skip: click remarks (cursor at end), type …, then blur toward Follow Up Type. */
+/** Follow Up Skip: click remarks (cursor at end), type remark + automation suffix, then blur toward Follow Up Type. */
 async function fillFollowUpRemarksForSkip(
   page: Page,
   modal: Locator,
   formRoot: Locator,
   log: EnquiryTransferContext["log"],
+  remarkText: string,
 ): Promise<void> {
   const remarks = await resolveFollowUpRemarksInput(formRoot);
   await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
 
   await withModalInputBypass(modal, async () => {
     await remarks.click({ timeout: scaleMs(10_000) });
-    await remarks.fill(FOLLOW_UP_SKIP_REMARKS);
+    await remarks.fill(remarkText);
     await humanDelay(350, 600);
 
     const box = await remarks.boundingBox();
@@ -3267,7 +3294,7 @@ async function fillFollowUpRemarksForSkip(
     }
   });
 
-  await log("info", `Follow Up Remarks = "${FOLLOW_UP_SKIP_REMARKS}".`);
+  await log("info", `Follow Up Remarks = "${remarkText}".`);
 }
 
 async function setNextFollowUpTime(
@@ -3345,17 +3372,18 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await log("info", "Follow Up tab — fill missing fields, Enquiry Type once, then Save.");
   await pause("normal");
 
+  const remarkText = await resolveEnquiryFollowUpRemark(page, ctx);
   if (await isFollowUpRemarksFilled(formRoot)) {
-    await log("info", `Follow Up Remarks already "${FOLLOW_UP_REMARKS}" — skipping re-type.`);
+    await log("info", `Follow Up Remarks already set (automation suffix) — skipping re-type.`);
   } else {
     const remarks = await resolveFollowUpRemarksInput(formRoot);
     await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
     await withModalInputBypass(modal, async () => {
       await remarks.click();
       await remarks.fill("");
-      await remarks.pressSequentially(FOLLOW_UP_REMARKS, { delay: scaledRandomBetween(80, 140) });
+      await remarks.pressSequentially(remarkText, { delay: scaledRandomBetween(80, 140) });
     });
-    await log("info", `Follow Up Remarks set to "${FOLLOW_UP_REMARKS}" (Scheme Offered left empty).`);
+    await log("info", `Follow Up Remarks set to "${remarkText}" (Scheme Offered left empty).`);
     await pause("normal");
   }
 
@@ -3392,8 +3420,8 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
-/** Remarks for Today's Follow Up skip automation (three dots only). */
-export const FOLLOW_UP_SKIP_REMARKS = "...";
+/** @deprecated use pickRandomFollowUpRemark + formatAutomationRemark from settings */
+export const FOLLOW_UP_SKIP_REMARKS = formatAutomationRemark("");
 
 /**
  * Next Follow Up date for skip flow (IST): tomorrow @ 9:30 PM;
@@ -3417,7 +3445,9 @@ export function followUpSkipNextDateIst(now = new Date()): {
 export type FollowUpSkipContext = Pick<
   EnquiryTransferContext,
   "log" | "shouldStop" | "waitIfPaused" | "signalManualIntervention"
->;
+> & {
+  followUpSkipRemarkBases: string[];
+};
 
 async function readFollowUpSkipDropdownDisplay(modal: Locator, label: RegExp): Promise<string> {
   try {
@@ -3549,7 +3579,7 @@ async function isFollowUpSkipReadyForSave(modal: Locator): Promise<boolean> {
   try {
     const remarks = await resolveFollowUpRemarksInput(formRoot);
     const t = (await remarks.inputValue().catch(() => "")).trim();
-    if (t !== FOLLOW_UP_SKIP_REMARKS) return false;
+    if (!isAutomationRemarkFilled(t)) return false;
   } catch {
     return false;
   }
@@ -3648,7 +3678,9 @@ export async function completeFollowUpTabForSkip(
   await pause("short");
   await log("info", "Follow Up tab — filling remarks, types (P), next time, then Save.");
 
-  await fillFollowUpRemarksForSkip(page, modal, formRoot, log);
+  const skipBase = pickRandomFollowUpRemark(ctx.followUpSkipRemarkBases);
+  const skipRemarkText = formatAutomationRemark(skipBase);
+  await fillFollowUpRemarksForSkip(page, modal, formRoot, log, skipRemarkText);
   await pause("normal");
 
   await dismissTransientKendoPopups(page);
@@ -3743,7 +3775,7 @@ async function processOneTransfer(
   ctx: EnquiryTransferContext,
   detailPage: Page,
 ): Promise<void> {
-  const { log, redis, dealerId } = ctx;
+  const { log } = ctx;
 
   let mainModal = await visibleEnquiryModal(detailPage);
   await mainModal.waitFor({ state: "visible", timeout: 4_000 });
@@ -3765,7 +3797,7 @@ async function processOneTransfer(
     );
   }
 
-  await fillBasicInfoAfterPin(detailPage, log, redis, dealerId);
+  await fillBasicInfoAfterPin(detailPage, ctx);
 
   await log(
     "info",
@@ -3868,6 +3900,7 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
       transferCompleted = true;
     } finally {
       if (transferCompleted) {
+        await incrementRunMetric(prisma, ctx.runId, "processed").catch(() => undefined);
         await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, detailPage, listPage);
         await humanDelay(800, 1800);
         await ensureListPageForPolling(listPage, log);

@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { authPreHandler } from "../lib/auth-pre.js";
 import { env } from "../config.js";
+import { prisma } from "../prisma.js";
+import { canAccessDealer } from "@gdms/auth";
 
 /** RTCIceServer-compatible entries for browser / native WebRTC clients. */
 function buildIceServers(): Array<{ urls: string | string[]; username?: string; credential?: string }> {
@@ -33,4 +36,27 @@ export async function registerIntegrationRoutes(app: FastifyInstance): Promise<v
     voiceBridgeEnabled: env.VOICE_BRIDGE_ENABLED,
     iceServers: buildIceServers(),
   }));
+
+  app.post("/v1/voice-profiles", { preHandler: authPreHandler }, async (req, reply) => {
+    const body = z
+      .object({
+        dealerId: z.string(),
+        artifactPath: z.string().min(1),
+        modelVersion: z.string().default("1"),
+      })
+      .parse(req.body);
+    if (!canAccessDealer(req.user!.dealerId, body.dealerId, req.user!.role)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+    const row = await prisma.voiceProfile.create({
+      data: {
+        dealerId: body.dealerId,
+        userId: req.user!.sub,
+        artifactPath: body.artifactPath,
+        modelVersion: body.modelVersion,
+        status: "READY",
+      },
+    });
+    return row;
+  });
 }

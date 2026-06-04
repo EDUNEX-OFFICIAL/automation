@@ -1,80 +1,78 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { cn } from "@/lib/utils";
-import { useAuthStore } from "@/stores/auth-store";
+import { useEffect, useState } from "react";
+import { AppSidebar } from "@/components/layout/app-sidebar";
+import { AppTopbar } from "@/components/layout/app-topbar";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { AppUserMenu } from "@/components/app-user-menu";
 import { OtpModal } from "@/components/otp-modal";
+import { RoleHomeRedirect } from "@/components/role-home-redirect";
+import { DashboardNavDrawer } from "@/components/dashboard-nav-drawer";
+import { MenuToggle } from "@/components/menu-toggle";
 import { useHealAutomationOnRefresh } from "@/hooks/use-heal-automation-on-refresh";
+import { reconcileLiveRunForCurrentUser } from "@/lib/run-ownership";
 import { useRealtimeSocket } from "@/hooks/use-realtime-socket";
 import { useLiveStore } from "@/stores/live-store";
-import { DashboardNavDrawer, dashboardNav } from "@/components/dashboard-nav-drawer";
-import { LiveRunNavBadge } from "@/components/live-run-nav-badge";
-import { MenuToggle } from "@/components/menu-toggle";
+import { cn } from "@/lib/utils";
+import { homePathForRole } from "@/lib/roles";
+import { pageTitleForPath } from "@/lib/breadcrumbs";
+import { useAuthStore } from "@/stores/auth-store";
+import { usePathname } from "next/navigation";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const role = useAuthStore((s) => s.user?.role);
+  const token = useAuthStore((s) => s.accessToken);
   const pathname = usePathname();
-  const { user } = useAuthStore();
+  const otpPending = useLiveStore((s) => s.otpPending);
   const [navOpen, setNavOpen] = useState(false);
   const liveRunId = useLiveStore((s) => s.runId);
+  const mobileTitle = pageTitleForPath(pathname);
   useRealtimeSocket();
   useHealAutomationOnRefresh(liveRunId);
 
+  useEffect(() => {
+    if (!token) return;
+    void reconcileLiveRunForCurrentUser(token);
+  }, [token, liveRunId]);
+
   return (
-    <div className="min-h-screen bg-zinc-50">
+    <div className="app-canvas gradient-mesh">
+      <RoleHomeRedirect />
       <OtpModal />
-      <DashboardNavDrawer
-        open={navOpen}
-        onClose={() => setNavOpen(false)}
-        userEmail={user?.email}
-      />
 
-      <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <MenuToggle
-              open={navOpen}
-              onClick={() => setNavOpen((v) => !v)}
-              className="shrink-0 xl:hidden"
-            />
-            <Link href="/dashboard" className="min-w-0 truncate font-semibold text-zinc-900">
-              GDMS Automation
-            </Link>
-          </div>
+      <div className="fixed inset-y-0 left-0 z-30 hidden lg:block">
+        <AppSidebar />
+      </div>
 
-          <nav className="hidden items-center gap-0.5 xl:flex" aria-label="Main">
-            {dashboardNav.map((n) => {
-              const Icon = n.icon;
-              const active = pathname?.startsWith(n.href);
-              return (
-                <Link
-                  key={n.href}
-                  href={n.href}
-                  className={cn(
-                    "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
-                    active
-                      ? "bg-zinc-900 font-medium text-white"
-                      : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900",
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.25 : 2} />
-                  <span className="flex items-center">
-                    {n.label}
-                    {n.href === "/live-session" ? <LiveRunNavBadge /> : null}
-                  </span>
-                </Link>
-              );
-            })}
-          </nav>
+      <DashboardNavDrawer open={navOpen} onClose={() => setNavOpen(false)} />
 
-          <div className="hidden max-w-[12rem] truncate text-right text-xs text-zinc-500 sm:block xl:max-w-[14rem]">
-            {user?.email}
-          </div>
+      <div className="flex min-h-screen flex-col lg:pl-[var(--sidebar-width)]">
+        <header className="sticky top-0 z-40 flex h-14 items-center gap-3 border-b border-border/80 bg-card/95 px-4 shadow-sm backdrop-blur-xl lg:hidden">
+          <MenuToggle open={navOpen} onClick={() => setNavOpen((v) => !v)} className="text-foreground" />
+          <Link
+            href={homePathForRole(role)}
+            className="min-w-0 flex-1 truncate text-sm font-semibold"
+          >
+            {mobileTitle}
+          </Link>
+          <ThemeToggle />
+          <AppUserMenu />
+        </header>
+
+        <div className="hidden lg:flex lg:flex-col">
+          <AppTopbar />
         </div>
-      </header>
 
-      <main className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6 sm:py-6 lg:py-8">{children}</main>
+        <main
+          className={cn(
+            "page-main mx-auto w-full max-w-[88rem]",
+            otpPending && "pb-28 lg:pb-8",
+          )}
+        >
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

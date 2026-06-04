@@ -22,6 +22,7 @@ esac
 vnc_w="${GDMS_VNC_WIDTH:-1920}"
 vnc_h="${GDMS_VNC_HEIGHT:-1080}"
 vnc_pass="${GDMS_VNC_PASSWORD:-gdms}"
+user_slots="${GDMS_USER_VNC_SLOTS:-16}"
 
 start_xvfb() {
   display="$1"
@@ -62,10 +63,18 @@ if [ "$remote" = "1" ] || { [ "$headed" = "1" ] && [ "$preview" = "0" ]; }; then
 fi
 
 if [ "$remote" = "1" ]; then
-  # Workspace 1 — enquiry transfer (:99 → 5900 → 6080)
-  start_vnc_workspace ":99" 5900 6080
-  # Workspace 2 — follow up skip (:100 → 5901 → 6081)
-  start_vnc_workspace ":100" 5901 6081
+  slot=0
+  while [ "$slot" -lt "$user_slots" ]; do
+    enq_display=$((101 + slot))
+    fup_display=$((117 + slot))
+    enq_rfb=$((5902 + slot))
+    fup_rfb=$((5918 + slot))
+    enq_ws=$((6082 + slot))
+    fup_ws=$((6098 + slot))
+    start_vnc_workspace ":${enq_display}" "$enq_rfb" "$enq_ws"
+    start_vnc_workspace ":${fup_display}" "$fup_rfb" "$fup_ws"
+    slot=$((slot + 1))
+  done
 fi
 
 exec node dist/server.js

@@ -1,4 +1,4 @@
-import type { WorkflowRun } from "@prisma/client";
+import type { WorkflowRun } from "@gdms/database";
 import {
   automationRunParamsSchema,
   isEnabledAutomationOperation,
@@ -31,8 +31,11 @@ export async function isAutomationSessionActive(runId: string): Promise<boolean>
 }
 
 async function buildResumeBody(run: WorkflowRun, params: AutomationRunParams) {
-  const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId: run.dealerId } });
-  if (!acc) return { ok: false as const, reason: "GDMS account not configured for this dealer." };
+  if (!run.startedByUserId) {
+    return { ok: false as const, reason: "This run has no linked user for GDMS credentials." };
+  }
+  const acc = await prisma.gdmsAccount.findUnique({ where: { userId: run.startedByUserId } });
+  if (!acc) return { ok: false as const, reason: "GDMS credentials not configured for this user." };
 
   const parseEnc = (stored: string): EncryptedPayload => JSON.parse(stored) as EncryptedPayload;
   const username = decryptSecret(parseEnc(acc.usernameCipher), env.CREDENTIALS_MASTER_KEY).trim();
@@ -57,6 +60,7 @@ async function buildResumeBody(run: WorkflowRun, params: AutomationRunParams) {
     body: {
       runId: run.id,
       dealerId: run.dealerId,
+      startedByUserId: run.startedByUserId,
       gdmsUsername: username,
       gdmsPassword: password,
       loginWorkflow,

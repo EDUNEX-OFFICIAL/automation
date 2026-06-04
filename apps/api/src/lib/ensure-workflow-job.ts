@@ -1,4 +1,4 @@
-import type { WorkflowRun } from "@prisma/client";
+import type { WorkflowRun } from "@gdms/database";
 import { automationRunParamsSchema, type WorkflowJobData } from "@gdms/shared";
 import { workflowQueue } from "../queue.js";
 
@@ -87,13 +87,16 @@ export async function isBullWaitListOrphan(runId: string): Promise<boolean> {
   }
 }
 
-function jobDataFromRun(run: Pick<WorkflowRun, "id" | "dealerId" | "runParams">): WorkflowJobData | null {
+function jobDataFromRun(
+  run: Pick<WorkflowRun, "id" | "dealerId" | "runParams" | "startedByUserId">,
+): WorkflowJobData | null {
   const parsed = automationRunParamsSchema.safeParse(run.runParams);
-  if (!parsed.success) return null;
+  if (!parsed.success || !run.startedByUserId) return null;
   const { operation, sources, subSources } = parsed.data;
   return {
     runId: run.id,
     dealerId: run.dealerId,
+    startedByUserId: run.startedByUserId,
     operation,
     sources,
     ...(subSources ? { subSources } : {}),
@@ -101,7 +104,7 @@ function jobDataFromRun(run: Pick<WorkflowRun, "id" | "dealerId" | "runParams">)
 }
 
 export async function ensureWorkflowJobQueued(
-  run: Pick<WorkflowRun, "id" | "dealerId" | "runParams">,
+  run: Pick<WorkflowRun, "id" | "dealerId" | "runParams" | "startedByUserId">,
   options?: EnsureWorkflowJobOptions,
 ): Promise<EnsureWorkflowJobResult> {
   const force = options?.force === true;

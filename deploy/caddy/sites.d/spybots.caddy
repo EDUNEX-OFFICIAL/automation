@@ -1,0 +1,5 @@
+# Host-run Spybot (systemd). Dedicated port avoids clashing with other local Next processes.
+spybots.in, www.spybots.in {
+	encode gzip
+	reverse_proxy host.docker.internal:{$SPYBOTS_UPSTREAM_PORT:3003}
+}

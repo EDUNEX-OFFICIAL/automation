@@ -45,6 +45,7 @@ function isTransientDispatchStatus(status: number): boolean {
 async function dispatchAutomation(input: {
   runId: string;
   dealerId: string;
+  startedByUserId: string;
   operation: AutomationOperation;
   sources: string[];
   subSources?: Record<string, string[]>;
@@ -64,6 +65,7 @@ async function dispatchAutomation(input: {
       body: JSON.stringify({
         runId: input.runId,
         dealerId: input.dealerId,
+        startedByUserId: input.startedByUserId,
         gdmsUsername: input.username,
         gdmsPassword: input.password,
         loginWorkflow: input.loginWorkflow,
@@ -85,7 +87,7 @@ async function dispatchAutomation(input: {
 
 function resolveOperationWorkflow(operation: AutomationOperation): WorkflowDefinition {
   if (operation === "enquiry_transfer") return enquiryTransferWorkflow();
-  if (operation === "follow_up_skip") return followUpSkipWorkflow();
+  if (operation === "follow_up_skip" || operation === "follow_up") return followUpSkipWorkflow();
   const targetUrl = env.GDMS_WORKFLOW_URL ?? env.GDMS_BASE_URL ?? "https://example.com";
   return operationStubWorkflow(operation, targetUrl);
 }
@@ -93,15 +95,16 @@ function resolveOperationWorkflow(operation: AutomationOperation): WorkflowDefin
 const workflowWorker = new Worker<WorkflowJobData>(
   "workflow",
   async (job) => {
-    const { runId, dealerId, operation, sources, subSources } = job.data;
+    const { runId, dealerId, startedByUserId, operation, sources, subSources } = job.data;
     log.info({ runId, operation, jobId: job.id }, "workflow job active");
 
     if (!isEnabledAutomationOperation(operation)) {
       throw new Error(`Operation "${operation}" is disabled`);
     }
 
-    const acc = await prisma.gdmsAccount.findUnique({ where: { dealerId } });
-    if (!acc) throw new Error("GDMS account not configured");
+    if (!startedByUserId) throw new Error("Workflow job missing startedByUserId");
+    const acc = await prisma.gdmsAccount.findUnique({ where: { userId: startedByUserId } });
+    if (!acc) throw new Error("GDMS credentials not configured for this user");
 
     const masterKey = env.CREDENTIALS_MASTER_KEY;
     const username = decryptSecret(parseEnc(acc.usernameCipher), masterKey).trim();
@@ -126,6 +129,7 @@ const workflowWorker = new Worker<WorkflowJobData>(
     await dispatchAutomation({
       runId,
       dealerId,
+      startedByUserId,
       operation,
       sources,
       subSources,

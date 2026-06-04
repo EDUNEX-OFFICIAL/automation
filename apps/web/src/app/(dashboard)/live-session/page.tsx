@@ -5,14 +5,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatusBanner } from "@/components/ui/status-banner";
 import { LiveSessionLogPanel } from "@/components/live-session-log-panel";
+import { OtpEntryPanel } from "@/components/otp-entry-panel";
 import { RunStatusBadge } from "@/components/run-status-badge";
+import { LiveSessionActions } from "@/components/live-session-actions";
+import { NativeSelect } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
 import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
-import { linkLiveSessionToInFlightRun } from "@/lib/saved-automation-session";
+import {
+  linkLiveSessionToInFlightRun,
+  resumeSavedAutomationSession,
+} from "@/lib/saved-automation-session";
+import { reconcileLiveRunForCurrentUser } from "@/lib/run-ownership";
 import {
   isTerminalRunStatus,
   terminateLiveSessionLocally,
@@ -46,6 +54,7 @@ type GdmsVncWorkspaceView = {
 export default function LiveSessionPage() {
   const router = useRouter();
   const token = useAuthStore((s) => s.accessToken);
+  const userId = useAuthStore((s) => s.user?.id);
   const runId = useLiveStore((s) => s.runId);
   const frame = useLiveStore((s) => s.frameBase64);
   const lastStep = useLiveStore((s) => s.lastStep);
@@ -63,6 +72,8 @@ export default function LiveSessionPage() {
   const [previewWorkspace, setPreviewWorkspace] = useState<1 | 2>(1);
   const [controlBusy, setControlBusy] = useState<"pause" | "resume" | "stop" | null>(null);
   const [controlNotice, setControlNotice] = useState<string | null>(null);
+  const [endedRun, setEndedRun] = useState<WorkflowRunRow | null>(null);
+  const [resuming, setResuming] = useState(false);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -70,12 +81,46 @@ export default function LiveSessionPage() {
 
   useEffect(() => {
     if (!token) return;
-    void apiFetch<{ enabled: boolean; workspaces?: GdmsVncWorkspaceView[] }>("/v1/gdms-browser-view", {
-      token,
-    })
+    void reconcileLiveRunForCurrentUser(token);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !userId || runId) {
+      setEndedRun(null);
+      return;
+    }
+    const saved = useAutomationSessionStore.getState().get(userId);
+    if (!saved?.runId) {
+      setEndedRun(null);
+      return;
+    }
+    void apiFetch<WorkflowRunRow>(`/v1/workflow-runs/${saved.runId}`, { token })
+      .then((r) => {
+        if (isTerminalRunStatus(r.status) || r.status === "FAILED") {
+          setEndedRun(r);
+          if (r.liveLogs?.length) useLiveStore.getState().mergeLogsFromPoll(r.liveLogs);
+        } else {
+          setEndedRun(null);
+        }
+      })
+      .catch(() => setEndedRun(null));
+  }, [token, userId, runId]);
+
+  useEffect(() => {
+    if (!token || !runId) {
+      setVncWorkspaces([]);
+      return;
+    }
+    const q = new URLSearchParams({ runId });
+    if (previewWorkspace === 2) q.set("workspace", "2");
+    else q.set("workspace", "1");
+    void apiFetch<{ enabled: boolean; workspaces?: GdmsVncWorkspaceView[]; url?: string }>(
+      `/v1/gdms-browser-view?${q.toString()}`,
+      { token },
+    )
       .then((r) => setVncWorkspaces(r.enabled && r.workspaces?.length ? r.workspaces : []))
       .catch(() => setVncWorkspaces([]));
-  }, [token]);
+  }, [token, runId, previewWorkspace]);
 
   const activeRunOperation = runRow?.runParams?.operation ?? runRow?.currentStep ?? "";
   const isFollowUpSkipRun = activeRunOperation === "follow_up_skip";
@@ -90,40 +135,33 @@ export default function LiveSessionPage() {
     vncWorkspaces[0]?.url ??
     null;
 
-  const dealerId = useAuthStore((s) => s.user?.dealerId);
   const sessionHydrated = useAutomationSessionStore.persist?.hasHydrated?.() ?? true;
 
   useEffect(() => {
-    if (!sessionHydrated || !token) return;
+    if (!sessionHydrated || !token || !userId) return;
 
     const linkRun = (): void => {
       if (useLiveStore.getState().runId) return;
-      if (dealerId) {
-        void apiFetch<WorkflowRunRow[]>(`/v1/workflow-runs?dealerId=${dealerId}`, { token })
-          .then((runs) => {
-            if (useLiveStore.getState().runId) return;
-            const pick =
-              runs.find((r) => r.status === "RUNNING") ??
-              runs.find((r) => r.status === "PAUSED_OTP") ??
-              runs.find((r) => r.status === "PENDING");
-            if (pick?.id) useLiveStore.getState().setRun(pick.id);
-          })
-          .catch(() => {});
-        return;
-      }
-      void linkLiveSessionToInFlightRun(token).catch(() => {});
+      void linkLiveSessionToInFlightRun(token, userId).catch(() => {});
     };
 
     linkRun();
     const t = window.setInterval(linkRun, 4000);
     return () => window.clearInterval(t);
-  }, [sessionHydrated, dealerId, token]);
+  }, [sessionHydrated, userId, token]);
 
   useEffect(() => {
     if (runRow?.status === "PAUSED_OTP" && runId) {
       useLiveStore.getState().openOtp(runId);
     }
-  }, [runRow?.status, runId]);
+  }, [runRow?.status, runId, runRow?.currentStep]);
+
+  const otpPending = useLiveStore((s) => s.otpPending);
+  useEffect(() => {
+    if ((runRow?.status === "PAUSED_OTP" || otpPending) && runId) {
+      useLiveStore.getState().openOtp(runId);
+    }
+  }, [runRow?.status, otpPending, runId]);
 
   useEffect(() => {
     if (!token || !runId) {
@@ -136,7 +174,7 @@ export default function LiveSessionPage() {
         .then((r) => {
           if (!stop) {
             if (isTerminalRunStatus(r.status)) {
-              terminateLiveSessionLocally(dealerId);
+              terminateLiveSessionLocally(userId);
               setRunRow(null);
               setPendingSince(null);
               return;
@@ -162,7 +200,7 @@ export default function LiveSessionPage() {
       stop = true;
       window.clearInterval(t);
     };
-  }, [token, runId]);
+  }, [token, runId, userId]);
 
   useEffect(() => {
     if (!token || !runId) {
@@ -207,11 +245,7 @@ export default function LiveSessionPage() {
         },
       );
       const label =
-        action === "pause"
-          ? "Paused — fix anything in GDMS if needed, then press Resume."
-          : action === "resume"
-            ? "Resumed — automation continues on the server."
-            : "Stopped — you can start a new run from the Dashboard.";
+        action === "pause" ? "Paused." : action === "resume" ? "Resumed." : "Stopped.";
       setControlNotice(label);
       useLiveStore.getState().pushLog({
         level: "info",
@@ -219,7 +253,7 @@ export default function LiveSessionPage() {
         ts: new Date().toISOString(),
       });
       if (action === "stop") {
-        terminateLiveSessionLocally(dealerId);
+        terminateLiveSessionLocally(userId);
         setRunRow(null);
         setSessionActive(false);
         setPendingSince(null);
@@ -282,11 +316,7 @@ export default function LiveSessionPage() {
       });
       useLiveStore.getState().pushLog({
         level: "info",
-        message: sessionActive
-          ? runRow?.status === "RUNNING"
-            ? "Continue transfer signalled — finish login on the home screen if needed."
-            : "Retry transfer started on the open browser session."
-          : "Resuming from saved browser profile (same run, no new OTP).",
+        message: sessionActive ? "Continuing enquiry transfer." : "Resuming saved session.",
         ts: new Date().toISOString(),
       });
     } catch (e) {
@@ -301,6 +331,23 @@ export default function LiveSessionPage() {
     }
   }
 
+  async function resumeFromSaved(): Promise<void> {
+    if (!token || !userId || resuming) return;
+    const saved = useAutomationSessionStore.getState().get(userId);
+    if (!saved?.runId) return;
+    setResuming(true);
+    setControlNotice(null);
+    try {
+      await resumeSavedAutomationSession(token, saved);
+      setEndedRun(null);
+      useLiveStore.getState().setRun(saved.runId);
+    } catch (e) {
+      setControlNotice(toUserMessage(e, "generic"));
+    } finally {
+      setResuming(false);
+    }
+  }
+
   async function gdmsLogout(): Promise<void> {
     if (!token || !runId) return;
     setLogoutMessage(null);
@@ -310,8 +357,7 @@ export default function LiveSessionPage() {
         token,
         body: JSON.stringify({}),
       });
-      const okMsg =
-        "GDMS logout requested — login page should appear in the preview shortly.";
+      const okMsg = "GDMS sign-out requested.";
       setLogoutMessage(null);
       useLiveStore.getState().pushLog({
         level: "info",
@@ -336,25 +382,21 @@ export default function LiveSessionPage() {
   const runIsActive = runRow?.status === "RUNNING" || runRow?.status === "PAUSED_OTP";
   const runStopped = runRow?.status === "STOPPED";
   const friendlyError = friendlyRunError(runRow?.errorMessage);
-  const needsBrowserSetup =
-    !!runRow?.errorMessage &&
-    /executable doesn't exist|playwright install/i.test(runRow.errorMessage);
-
   const previewHint = !runId
-    ? "No active run — start enquiry transfer from the Dashboard; Follow Up Skip runs on the schedule in Settings."
+    ? "No active run."
     : !realtimeConnected
-      ? "Connecting to live updates…"
+      ? "Connecting…"
       : runStopped
-        ? "Live preview ended."
+        ? "Preview ended."
         : runFailed || runPausedUser
-          ? friendlyError ?? "This run needs attention."
+          ? friendlyError ?? "Needs attention."
           : runRow?.status === "RUNNING"
             ? frame
-              ? "Live GDMS preview from the automation server."
-              : "Automation is running — preview frames will appear shortly."
+              ? "Live preview."
+              : "Starting preview…"
             : runRow?.status === "PENDING"
-              ? "Your run is queued. This usually takes a few seconds."
-              : "Waiting for the browser preview…";
+              ? "Queued…"
+              : "Waiting for preview…";
 
   const showPostLogin = workflowDone || runRow?.status === "COMPLETED";
   const canContinueWhileRunning =
@@ -378,7 +420,6 @@ export default function LiveSessionPage() {
       : isFollowUpSkipRun
         ? "Retry follow-up skip"
         : "Retry transfer";
-  const automationRunning = runRow?.status === "RUNNING" || runRow?.status === "PAUSED_OTP";
   const runStatus = runRow?.status;
   const canPause = !!runId && (runStatus === "RUNNING" || runStatus === "PAUSED_OTP");
   const canResume = !!runId && (runStatus === "PAUSED_USER" || runStatus === "FAILED");
@@ -402,43 +443,29 @@ export default function LiveSessionPage() {
     "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale disabled:hover:bg-inherit disabled:hover:text-inherit";
 
   return (
-    <div className="space-y-4">
-      {showPostLogin && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-green-900">
-          <p className="font-medium">GDMS login / workflow complete</p>
-          <p className="mt-1 text-sm text-green-800">
-            The browser preview below should show Hyundai DMS <strong>logged-in (home / dashboard)</strong>.
-            Preview stays live until you press Stop. If GDMS session times out, the login page opens automatically.
-            Use <strong>Logout GDMS</strong> to sign out of the previewed site.
-          </p>
+    <>
+      {!runId && endedRun ? (
+        <StatusBanner variant="warning" title="Previous automation ended">
+          <p className="font-mono text-xs opacity-90">{endedRun.status} · {endedRun.id}</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button asChild variant="outline" size="sm" className="border-green-300 bg-white">
-              <Link href="/leads">SaaS → Leads</Link>
+            <Button size="sm" disabled={resuming} onClick={() => void resumeFromSaved()}>
+              {resuming ? "Starting…" : "Resume automation"}
             </Button>
-            <Button asChild variant="outline" size="sm" className="border-green-300 bg-white">
-              <Link href="/dashboard">SaaS → Dashboard</Link>
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/dashboard">Start fresh on Dashboard</Link>
             </Button>
           </div>
+        </StatusBanner>
+      ) : null}
+
+      {showPostLogin && (
+        <div className="panel-success">
+          <p className="font-medium">GDMS ready</p>
         </div>
       )}
 
-      {automationRunning && (
-        <StatusBanner variant="warning" title="Do not interrupt automation">
-          GDMS runs in a browser on the automation server. Use <strong>Pause</strong> or{" "}
-          <strong>Stop</strong> on this page only.
-        </StatusBanner>
-      )}
-
-      {runRow?.status === "PAUSED_OTP" && (
-        <StatusBanner variant="warning" title="OTP required">
-          Submit the OTP from the popup on this page. The preview is read-only for login — typing OTP there does not continue automation.
-        </StatusBanner>
-      )}
-
-      {runRow?.status === "RUNNING" && lastStep === "Enter OTP into GDMS" && (
-        <p className="text-sm text-amber-800">
-          OTP has been filled. Automation will click the blue <strong>Login</strong> button next. Wait for the preview to update.
-        </p>
+      {(runRow?.status === "PAUSED_OTP" || otpPending) && (
+        <OtpEntryPanel variant="card" className="mb-2" />
       )}
 
       {logoutMessage && (
@@ -448,65 +475,36 @@ export default function LiveSessionPage() {
       )}
 
       {runRow?.status === "PENDING" && pendingAgeMs > 20_000 ? (
-        <StatusBanner variant="warning" title="Run is stuck in queue">
-          The worker did not start this run yet. Press <strong>Retry queue</strong> or wait — we
-          re-queue automatically. A black noVNC window is normal until Chrome starts on the server.
-        </StatusBanner>
+        <StatusBanner variant="warning" title="Still queued" />
       ) : null}
 
       {controlNotice ? (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-950">
+        <div className="rounded-lg border border-info/25 bg-info/10 px-4 py-2.5 text-sm text-foreground">
           {controlNotice}
         </div>
       ) : null}
 
       {friendlyError && runIsActive && sessionActive ? (
-        <StatusBanner variant="warning" title="Earlier message (run still active)">
-          {friendlyError} Use <strong>Stop</strong> to end the run, or let automation continue.
+        <StatusBanner variant="warning" title="Notice">
+          {friendlyError}
         </StatusBanner>
       ) : null}
 
       {(runFailed || runPausedUser) && friendlyError && !runIsActive && (
         <StatusBanner
           variant="error"
-          title={runPausedUser ? "Manual intervention required" : "Automation could not run"}
+          title={runPausedUser ? "Paused" : "Failed"}
         >
           {friendlyError}
-          {sessionActive ? (
-            <p className="mt-2 text-sm">
-              The visible browser session may still be open. Fix the issue in GDMS, then press{" "}
-              <strong>{isFollowUpSkipRun ? "Retry follow-up skip" : "Retry transfer"}</strong>.
-            </p>
-          ) : null}
-          {runFailed && needsBrowserSetup ? (
-            <p className="mt-2 font-mono text-xs opacity-80">
-              Dev fix: run{" "}
-              <code className="rounded bg-red-100 px-1">
-                pnpm --filter @gdms/automation-service run pw:install
-              </code>{" "}
-              in the project folder, then restart{" "}
-              <code className="rounded bg-red-100 px-1">pnpm dev</code>.
-            </p>
-          ) : null}
         </StatusBanner>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-semibold">Live session</h1>
+      <PageHeader
+        title="Live session"
+        eyebrow={runId ?? "Monitoring"}
+        actions={
+          <LiveSessionActions>
             <RunStatusBadge status={runRow?.status} />
-          </div>
-          <p className="mt-1 font-mono text-xs text-zinc-600">{runId ?? "—"}</p>
-          <p className="text-xs text-zinc-500">
-            Live updates:{" "}
-            <span className={realtimeConnected ? "font-medium text-emerald-700" : "text-amber-700"}>
-              {realtimeConnected ? "connected" : "connecting…"}
-            </span>
-            {sessionActive ? " · Browser active on server" : ""}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
           {gdmsBrowserUrl &&
           (sessionActive ||
             runRow?.status === "RUNNING" ||
@@ -514,7 +512,7 @@ export default function LiveSessionPage() {
             <Button
               size="sm"
               variant="default"
-              className="bg-blue-700 hover:bg-blue-800"
+              className="hidden bg-primary hover:bg-primary/90 md:inline-flex"
               onClick={() => {
                 window.open(
                   gdmsBrowserUrl,
@@ -557,7 +555,9 @@ export default function LiveSessionPage() {
             className={cn(
               controlBtnDisabledClass,
               controlBusy === "resume" && "ring-2 ring-emerald-400",
-              canResume && !controlBusy && "border-emerald-300 hover:bg-emerald-50",
+              canResume &&
+                !controlBusy &&
+                "border-emerald-300 hover:bg-emerald-50 dark:border-emerald-600 dark:hover:bg-emerald-950/40",
             )}
             disabled={!canResume || !!controlBusy}
             onClick={() => void control("resume")}
@@ -580,35 +580,50 @@ export default function LiveSessionPage() {
             className={cn(
               controlBtnDisabledClass,
               controlBusy === "stop" && "ring-2 ring-red-400",
-              canStop && !controlBusy && "border-red-300 text-red-900 hover:bg-red-50",
+              canStop &&
+                !controlBusy &&
+                "border-red-300 text-red-900 hover:bg-red-50 dark:border-red-600 dark:text-red-200 dark:hover:bg-red-950/40",
             )}
             disabled={!canStop || !!controlBusy}
             onClick={() => void control("stop")}
           >
             {controlBusy === "stop" ? "Stopping…" : "Stop"}
           </Button>
-        </div>
-      </div>
+          </LiveSessionActions>
+        }
+      />
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      {runRow?.currentStep ? (
+        <div className="rounded-xl border border-border/80 bg-card px-4 py-3 shadow-card">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="font-medium text-foreground">Current step</span>
+            <span className="font-mono text-xs text-muted-foreground">{runRow.currentStep}</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{
+                width: runRow.status === "COMPLETED" ? "100%" : runRow.status === "RUNNING" ? "55%" : "25%",
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-3 lg:gap-8">
         <Card className="lg:col-span-2">
           <CardHeader className="space-y-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <CardTitle>Browser preview</CardTitle>
-                <p className="mt-1 text-xs font-normal text-zinc-500">
-                  <strong>Workspace 1</strong> = Enquiry transfer · <strong>Workspace 2</strong> = Follow
-                  Up Skip. Use the dropdown to switch noVNC; the JPEG below is the current Live run stream.
-                </p>
               </div>
               {vncWorkspaces.length > 0 ? (
                 <div className="flex shrink-0 flex-col gap-1">
-                  <label htmlFor="preview-workspace" className="text-xs font-medium text-zinc-600">
+                  <label htmlFor="preview-workspace" className="text-xs font-medium text-muted-foreground">
                     noVNC workspace
                   </label>
-                  <select
+                  <NativeSelect
                     id="preview-workspace"
-                    className="rounded border border-zinc-200 bg-white px-2 py-1.5 text-sm"
                     value={previewWorkspace}
                     onChange={(e) => setPreviewWorkspace(Number(e.target.value) as 1 | 2)}
                   >
@@ -617,46 +632,50 @@ export default function LiveSessionPage() {
                         Workspace {w.id} — {w.label}
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </div>
               ) : null}
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {gdmsBrowserUrl && vncWorkspaces.length > 0 ? (
-              <iframe
-                title={`GDMS noVNC workspace ${previewWorkspace}`}
-                src={gdmsBrowserUrl}
-                className="h-[min(52vh,520px)] w-full rounded border border-zinc-200 bg-black"
-                allow="clipboard-read; clipboard-write"
-              />
-            ) : null}
-            {frame ? (
+            {runId && frame ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 alt="live"
-                className="w-full rounded border border-zinc-200"
+                className="h-[min(52vh,520px)] w-full rounded border border-border object-contain bg-black"
                 src={`data:image/jpeg;base64,${frame}`}
               />
-            ) : (
-              <div className="flex h-64 flex-col items-center justify-center gap-2 rounded bg-zinc-100 px-4 text-center text-sm text-zinc-500">
+            ) : null}
+            {gdmsBrowserUrl && vncWorkspaces.length > 0 ? (
+              <>
+                <iframe
+                  title={`GDMS noVNC workspace ${previewWorkspace}`}
+                  src={gdmsBrowserUrl}
+                  className={cn(
+                    "w-full rounded border border-border bg-black",
+                    runId && frame ? "h-48" : "h-[min(52vh,520px)]",
+                  )}
+                  allow="clipboard-read; clipboard-write"
+                />
+              </>
+            ) : null}
+            {!frame && !(gdmsBrowserUrl && vncWorkspaces.length > 0) ? (
+              <div className="flex h-64 flex-col items-center justify-center gap-2 rounded bg-muted px-4 text-center text-sm text-muted-foreground">
                 <p>{previewHint}</p>
               </div>
-            )}
+            ) : null}
           </CardContent>
         </Card>
 
         <LiveSessionLogPanel
-          logs={logs}
-          lastStepLabel={lastStep}
-          apiCurrentStep={runRow?.currentStep ?? null}
+          logs={runId || endedRun ? logs : []}
           runStatus={runRow?.status}
           prominentError={
             runFailed || runPausedUser ? friendlyError ?? runRow?.errorMessage ?? null : null
           }
-          onClearLogs={() => useLiveStore.getState().resetLogs()}
+          onClearLogs={() => useLiveStore.getState().clearLogs()}
         />
       </div>
-    </div>
+    </>
   );
 }

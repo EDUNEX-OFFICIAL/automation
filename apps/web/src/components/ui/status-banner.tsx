@@ -15,27 +15,26 @@ export function StatusBanner({ variant, title, children, className }: StatusBann
     <div
       role={isSuccess ? "status" : "alert"}
       className={cn(
-        "flex gap-3 rounded-lg border px-4 py-3 text-sm",
+        "flex gap-3 rounded-xl border px-4 py-3.5 text-sm shadow-sm",
         isSuccess
-          ? "border-green-200 bg-green-50 text-green-900"
+          ? "border-emerald-500/25 bg-emerald-500/8 text-foreground"
           : isWarning
-            ? "border-amber-200 bg-amber-50 text-amber-950"
-            : "border-red-200 bg-red-50 text-red-900",
+            ? "border-amber-500/25 bg-amber-500/8 text-foreground"
+            : "border-destructive/25 bg-destructive/8 text-foreground",
         className,
       )}
     >
       {isSuccess ? (
-        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-green-600" aria-hidden />
+        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
       ) : isWarning ? (
-        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden />
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
       ) : (
-        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" aria-hidden />
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden />
       )}
       <div className="min-w-0">
-        <p className="font-medium">{title}</p>
-        {children ? <div className="mt-1 text-[13px] opacity-90">{children}</div> : null}
+        <p className="font-medium text-foreground">{title}</p>
+        {children ? <div className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{children}</div> : null}
       </div>
     </div>
   );
 }
-

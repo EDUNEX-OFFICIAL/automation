@@ -16,6 +16,7 @@ const workflowDefSchema = z.custom<WorkflowDefinition>();
 const bodySchema = z.object({
   runId: z.string(),
   dealerId: z.string(),
+  startedByUserId: z.string(),
   gdmsUsername: z.string(),
   gdmsPassword: z.string(),
   loginWorkflow: workflowDefSchema,

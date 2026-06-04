@@ -2,7 +2,7 @@ import path from "node:path";
 import { Redis } from "ioredis";
 import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
-import { displayForOperation } from "@gdms/shared";
+import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
 import {
   closeActiveSessionsForDealer,
@@ -31,6 +31,7 @@ import { createPreviewStream } from "./preview-stream.js";
 import { env } from "./config.js";
 import type { ExecutePayload } from "./runner.js";
 import { retryEnquiryTransfer } from "./retry-enquiry-transfer.js";
+import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 
 const prisma = createPrisma();
 
@@ -78,10 +79,11 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     });
   };
 
-  const sessionDir = path.join(env.SESSIONS_DIR, dealerId);
-  await closeActiveSessionsForDealer(dealerId);
+  const profileKey = browserProfileKeyForOperation(dealerId, payload.operation, payload.startedByUserId);
+  const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
+  await closeActiveSessionsForDealer(dealerId, profileKey);
   const context = await launchGdmsPersistentContext(sessionDir, {
-    display: displayForOperation(payload.operation),
+    display: displayForUserOperation(payload.startedByUserId, payload.operation),
   });
 
   await installAutomationBrowserScripts(context);
@@ -89,7 +91,7 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     void log("warn", message);
   });
 
-  if (await applyGdmsBootstrapCookies(context, sessionDir, payload.dealerId)) {
+  if (await applyGdmsBootstrapCookies(context, sessionDir, payload.startedByUserId)) {
     await log("info", "GDMS bootstrap cookies applied from env.");
   }
 
@@ -114,7 +116,8 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
   registerActiveSession({
     runId,
     dealerId,
-    profileKey: browserProfileKeyForOperation(dealerId, payload.operation),
+    startedByUserId: payload.startedByUserId,
+    profileKey,
     page,
     context,
     payload,
@@ -184,13 +187,19 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
       });
     }
 
+    const remarkConfig = await loadDealerRemarkConfig(dealerId);
     await runEnquiryTransfer({
       page,
       runId,
       dealerId,
+      startedByUserId: payload.startedByUserId,
       redis: redisClient,
       sources: payload.sources,
       subSources: payload.subSources,
+      remarkConfig: {
+        defaultEnquiryRemarkBase: remarkConfig.defaultEnquiryRemarkBase,
+        enquiryRemarkRules: remarkConfig.enquiryRemarkRules,
+      },
       log,
       shouldStop: () => isStopped(redisClient, runId),
       waitIfPaused: () => waitIfPaused(redisClient, runId),

@@ -18,19 +18,28 @@ const BADGE_STYLES: Record<string, string> = {
 /** Small status pill on the Live session nav link when a run is linked. */
 export function LiveRunNavBadge() {
   const token = useAuthStore((s) => s.accessToken);
+  const userId = useAuthStore((s) => s.user?.id);
   const runId = useLiveStore((s) => s.runId);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token || !runId) {
+    if (!token || !runId || !userId) {
       setStatus(null);
       return;
     }
     let stop = false;
     const poll = (): void => {
-      void apiFetch<{ status: string }>(`/v1/workflow-runs/${runId}`, { token })
+      void apiFetch<{ status: string; startedByUserId?: string | null }>(
+        `/v1/workflow-runs/${runId}`,
+        { token },
+      )
         .then((r) => {
-          if (!stop) setStatus(r.status);
+          if (stop) return;
+          if (r.startedByUserId && r.startedByUserId !== userId) {
+            setStatus(null);
+            return;
+          }
+          setStatus(r.status);
         })
         .catch(() => {
           if (!stop) setStatus(null);
@@ -42,7 +51,7 @@ export function LiveRunNavBadge() {
       stop = true;
       window.clearInterval(t);
     };
-  }, [token, runId]);
+  }, [token, runId, userId]);
 
   if (!runId || !status) return null;
   if (status === "COMPLETED" || status === "STOPPED") return null;
@@ -51,7 +60,7 @@ export function LiveRunNavBadge() {
     <span
       className={cn(
         "ml-1.5 inline-flex max-w-[5.5rem] truncate rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white",
-        BADGE_STYLES[status] ?? "bg-zinc-500",
+        BADGE_STYLES[status] ?? "bg-muted-foreground",
       )}
       title={runStatusLabel(status)}
     >

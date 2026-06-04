@@ -12,6 +12,8 @@ import {
 } from "./redis.js";
 import { Redis } from "ioredis";
 import { appendRunLogBuffer } from "./run-log-buffer.js";
+import { archiveRunLogsToDb } from "./lib/run-log-archive.js";
+import { notifyUser, notifyDealerAdmins } from "./lib/notifications.js";
 import { prisma } from "./prisma.js";
 import {
   SocketEvents,
@@ -46,6 +48,7 @@ export function attachSocket(httpServer: HttpServer): Server {
   if (ioRef) return ioRef;
   const corsOrigins = env.CORS_ORIGIN.split(",").map((s) => s.trim());
   const io = new Server(httpServer, {
+    path: "/socket.io",
     cors:
       env.NODE_ENV === "development"
         ? { origin: true, credentials: true }
@@ -113,14 +116,14 @@ export function attachSocket(httpServer: HttpServer): Server {
       const user = data.user as AccessTokenPayload;
       void (async () => {
         try {
-          if (user?.role === "SUPER_ADMIN") {
-            const dealers = await prisma.dealer.findMany({ select: { id: true } });
-            await Promise.all(dealers.map((d) => socket.join(roomForDealer(d.id))));
-          } else if (user?.dealerId) {
+          if (user?.sub) {
+            await socket.join(`user:${user.sub}`);
+          }
+          if (user?.dealerId && user.role !== "SUPER_ADMIN") {
             await socket.join(roomForDealer(user.dealerId));
           }
         } catch (e) {
-          console.error("socket dealer room join", e);
+          console.error("socket room join", e);
         }
       })();
       socket.on("join_run", (runId: string) => {
@@ -183,41 +186,50 @@ export function attachSocket(httpServer: HttpServer): Server {
         payload?: unknown;
       };
       if (!evt.type) return;
+      /** Automation events go only to join_run subscribers — never dealer-wide (TL/SC isolation). */
+      const emitToRunRoom = (workflowRunId: string | undefined, type: string, payload: unknown): void => {
+        if (workflowRunId) io.to(roomForWorkflowRun(workflowRunId)).emit(type, payload);
+      };
+
       if (evt.type === SocketEvents.OTP_REQUIRED) {
         const p = evt.payload as OtpRequiredPayload;
-        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(SocketEvents.OTP_REQUIRED, p);
-        io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.OTP_REQUIRED, p);
+        emitToRunRoom(p.workflowRunId, SocketEvents.OTP_REQUIRED, p);
+        if (p.workflowRunId && evt.dealerId) {
+          void handleOtpNotify(evt.dealerId, p.workflowRunId).catch(console.error);
+        }
       } else if (evt.type === SocketEvents.STEP_COMPLETED) {
         const p = evt.payload as StepCompletedPayload;
-        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(SocketEvents.STEP_COMPLETED, p);
-        io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.STEP_COMPLETED, p);
+        emitToRunRoom(p.workflowRunId, SocketEvents.STEP_COMPLETED, p);
       } else if (evt.type === SocketEvents.SCREENSHOT_FRAME) {
         const p = evt.payload as ScreenshotFramePayload;
-        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(SocketEvents.SCREENSHOT_FRAME, p);
-        io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.SCREENSHOT_FRAME, p);
+        emitToRunRoom(p.workflowRunId, SocketEvents.SCREENSHOT_FRAME, p);
       } else if (evt.type === SocketEvents.LOG_LINE) {
         const p = evt.payload as LogLinePayload;
         void appendRunLogBuffer(p).catch((e) => console.error("run log buffer", e));
-        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(SocketEvents.LOG_LINE, p);
-        io.to(roomForWorkflowRun(p.workflowRunId)).emit(SocketEvents.LOG_LINE, p);
-      } else if (evt.type === SocketEvents.WORKFLOW_STARTED && evt.dealerId) {
-        io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
-      } else if (evt.type === SocketEvents.WORKFLOW_FAILED && evt.dealerId) {
-        const p = evt.payload as { workflowRunId?: string; error?: string };
-        io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
-        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
-      } else if (evt.type === SocketEvents.WORKFLOW_PAUSED_USER && evt.dealerId) {
+        emitToRunRoom(p.workflowRunId, SocketEvents.LOG_LINE, p);
+      } else if (evt.type === SocketEvents.WORKFLOW_STARTED) {
+        const p = evt.payload as { workflowRunId?: string };
+        emitToRunRoom(p.workflowRunId, evt.type, evt.payload);
+      } else if (evt.type === SocketEvents.WORKFLOW_FAILED) {
+        const p = evt.payload as { workflowRunId?: string; error?: string; startedByUserId?: string };
+        emitToRunRoom(p.workflowRunId, evt.type, evt.payload);
+        if (p.workflowRunId) {
+          void archiveRunLogsToDb(p.workflowRunId).catch(console.error);
+          void handleRunTerminalNotify(evt.dealerId, p.workflowRunId, "failed", p.error).catch(console.error);
+        }
+      } else if (evt.type === SocketEvents.WORKFLOW_PAUSED_USER) {
         const p = evt.payload as WorkflowPausedUserPayload;
-        io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
-        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
-      } else if (evt.type === SocketEvents.WORKFLOW_COMPLETED && evt.dealerId) {
+        emitToRunRoom(p.workflowRunId, evt.type, evt.payload);
+      } else if (evt.type === SocketEvents.WORKFLOW_COMPLETED) {
         const p = evt.payload as WorkflowCompletedPayload;
-        io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
-        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
+        emitToRunRoom(p.workflowRunId, evt.type, evt.payload);
+        if (p.workflowRunId) {
+          void archiveRunLogsToDb(p.workflowRunId).catch(console.error);
+          void handleRunTerminalNotify(evt.dealerId, p.workflowRunId, "completed").catch(console.error);
+        }
       } else if (evt.type === SocketEvents.GDMS_SESSION_REDIRECTED) {
         const p = evt.payload as { workflowRunId?: string };
-        if (evt.dealerId) io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
-        if (p?.workflowRunId) io.to(roomForWorkflowRun(p.workflowRunId)).emit(evt.type, evt.payload);
+        emitToRunRoom(p.workflowRunId, evt.type, evt.payload);
       } else if (evt.type === SocketEvents.LEAD_CLASSIFIED && evt.dealerId) {
         io.to(roomForDealer(evt.dealerId)).emit(evt.type, evt.payload);
       } else if (evt.type === SocketEvents.CALL_STARTED && evt.dealerId) {
@@ -239,4 +251,61 @@ export async function publishWorkflowEvent(event: {
   payload: unknown;
 }): Promise<void> {
   await redis.publish(WORKFLOW_REDIS_CHANNEL, JSON.stringify(event));
+}
+
+async function handleOtpNotify(dealerId: string, runId: string): Promise<void> {
+  const run = await prisma.workflowRun.findUnique({
+    where: { id: runId },
+    select: { startedByUserId: true },
+  });
+  if (run?.startedByUserId) {
+    await notifyUser({
+      userId: run.startedByUserId,
+      type: "OTP_REQUIRED",
+      title: "GDMS OTP required",
+      body: "Open Live session to enter the OTP code.",
+      payload: { runId },
+    });
+  }
+  await notifyDealerAdmins(dealerId, {
+    type: "OTP_REQUIRED",
+    title: "Team member needs OTP",
+    body: "A GDMS automation run is waiting for OTP.",
+    payload: { runId },
+  });
+}
+
+async function handleRunTerminalNotify(
+  dealerId: string | undefined,
+  runId: string,
+  outcome: "failed" | "completed",
+  error?: string,
+): Promise<void> {
+  const run = await prisma.workflowRun.findUnique({
+    where: { id: runId },
+    select: { startedByUserId: true, runParams: true },
+  });
+  if (!run) return;
+  const op =
+    run.runParams && typeof run.runParams === "object" && "operation" in run.runParams
+      ? String((run.runParams as { operation?: string }).operation)
+      : "automation";
+
+  if (run.startedByUserId) {
+    await notifyUser({
+      userId: run.startedByUserId,
+      type: outcome === "failed" ? "WORKFLOW_FAILED" : "WORKFLOW_COMPLETED",
+      title: outcome === "failed" ? `${op} failed` : `${op} completed`,
+      body: error?.slice(0, 200),
+      payload: { runId, dealerId },
+    });
+  }
+  if (dealerId && outcome === "failed") {
+    await notifyDealerAdmins(dealerId, {
+      type: "WORKFLOW_FAILED",
+      title: `Scheduled ${op} failed`,
+      body: error?.slice(0, 200) ?? "Check Live session for details.",
+      payload: { runId },
+    });
+  }
 }

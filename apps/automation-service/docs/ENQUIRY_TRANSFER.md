@@ -95,11 +95,13 @@ flowchart TD
 
 ## Sales consultant rotation
 
-Order (hardcoded): **Md Nafees Hussain** → **Priyali Singh** → **Amit Kumar** → repeat.
+Round-robin uses **active Sales Consultants under the Team Leader** who owns the run:
 
-- Redis key: `gdms:dealer:{dealerId}:consultant_rotation` (0-based index).
-- Each **completed** transfer advances the index after Follow Up save.
-- 1 enquiry → first consultant; 2 enquiries → first then second; etc.
+- Run started by a **TL** → that TL’s SCs (`reportsToUserId` = TL id).
+- Run started by an **SC** → their TL’s SC list (same team).
+- Labels: `displayName` if set, else `username` (must match GDMS dropdown text).
+- Redis key: `gdms:tl:{teamLeaderUserId}:consultant_rotation` (per TL, not per dealer).
+- Order: stable sort by display name / username.
 
 Implementation: `src/consultant-rotation.ts`.
 

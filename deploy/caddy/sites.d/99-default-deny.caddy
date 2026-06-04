@@ -1,0 +1,8 @@
+# Reject unknown Host headers (raw IP, typos) so they never hit a named app backend.
+:80 {
+	respond "Not found" 404
+}
+
+:443 {
+	respond "Not found" 404
+}

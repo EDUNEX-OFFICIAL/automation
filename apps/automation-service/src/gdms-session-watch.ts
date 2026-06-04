@@ -47,7 +47,7 @@ export function redisWatchHeartbeatKey(runId: string): string {
   return `run:${runId}:watch:heartbeat`;
 }
 
-async function touchWatchHeartbeat(redis: Redis, runId: string): Promise<void> {
+export async function touchWatchHeartbeat(redis: Redis, runId: string): Promise<void> {
   await redis.set(redisWatchHeartbeatKey(runId), String(Date.now()), "EX", 120);
 }
 

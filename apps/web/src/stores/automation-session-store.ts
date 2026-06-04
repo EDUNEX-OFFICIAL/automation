@@ -16,12 +16,13 @@ export type SavedAutomationSession = {
 };
 
 type AutomationSessionState = {
-  byDealer: Record<string, SavedAutomationSession>;
-  save: (session: Omit<SavedAutomationSession, "savedAt">) => void;
-  markOtpVerified: (dealerId: string) => void;
-  markGdmsReady: (dealerId: string) => void;
-  clear: (dealerId: string) => void;
-  get: (dealerId: string) => SavedAutomationSession | undefined;
+  /** Keyed by app user id — not dealer (multiple TL/SC share a dealer). */
+  byUser: Record<string, SavedAutomationSession>;
+  save: (userId: string, session: Omit<SavedAutomationSession, "savedAt">) => void;
+  markOtpVerified: (userId: string) => void;
+  markGdmsReady: (userId: string) => void;
+  clear: (userId: string) => void;
+  get: (userId: string) => SavedAutomationSession | undefined;
 };
 
 function webStorage(): Storage {
@@ -56,54 +57,53 @@ function webStorage(): Storage {
 export const useAutomationSessionStore = create<AutomationSessionState>()(
   persist(
     (set, get) => ({
-      byDealer: {},
-      save: (session) =>
+      byUser: {},
+      save: (userId, session) =>
         set((s) => ({
-          byDealer: {
-            ...s.byDealer,
-            [session.dealerId]: {
+          byUser: {
+            ...s.byUser,
+            [userId]: {
               ...session,
               savedAt: Date.now(),
-              otpVerifiedAt: s.byDealer[session.dealerId]?.otpVerifiedAt,
-              gdmsReadyAt: s.byDealer[session.dealerId]?.gdmsReadyAt,
+              otpVerifiedAt: s.byUser[userId]?.otpVerifiedAt,
+              gdmsReadyAt: s.byUser[userId]?.gdmsReadyAt,
             },
           },
         })),
-      markOtpVerified: (dealerId) =>
+      markOtpVerified: (userId) =>
         set((s) => {
-          const cur = s.byDealer[dealerId];
+          const cur = s.byUser[userId];
           if (!cur) return s;
           return {
-            byDealer: {
-              ...s.byDealer,
-              [dealerId]: { ...cur, otpVerifiedAt: Date.now() },
+            byUser: {
+              ...s.byUser,
+              [userId]: { ...cur, otpVerifiedAt: Date.now() },
             },
           };
         }),
-      markGdmsReady: (dealerId) =>
+      markGdmsReady: (userId) =>
         set((s) => {
-          const cur = s.byDealer[dealerId];
+          const cur = s.byUser[userId];
           if (!cur) return s;
           return {
-            byDealer: {
-              ...s.byDealer,
-              [dealerId]: { ...cur, gdmsReadyAt: Date.now() },
+            byUser: {
+              ...s.byUser,
+              [userId]: { ...cur, gdmsReadyAt: Date.now() },
             },
           };
         }),
-      clear: (dealerId) =>
+      clear: (userId) =>
         set((s) => {
-          const copy = { ...s.byDealer };
-          delete copy[dealerId];
-          return { byDealer: copy };
+          const copy = { ...s.byUser };
+          delete copy[userId];
+          return { byUser: copy };
         }),
-      get: (dealerId) => get().byDealer[dealerId],
+      get: (userId) => get().byUser[userId],
     }),
     {
-      name: "gdms-automation-session",
+      name: "gdms-automation-session-v2",
       storage: createJSONStorage(() => webStorage()),
-      partialize: (state) => ({ byDealer: state.byDealer }),
+      partialize: (state) => ({ byUser: state.byUser }),
     },
   ),
 );
-

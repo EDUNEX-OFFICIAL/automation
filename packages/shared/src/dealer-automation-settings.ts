@@ -1,4 +1,13 @@
 import { z } from "zod";
+import {
+  defaultEnquiryRemarkBaseSchema,
+  enquiryRemarkRulesSchema,
+  followUpSkipRemarkBasesSchema,
+  normalizeEnquiryRemarkRules,
+  normalizeFollowUpSkipRemarkBases,
+  normalizeRemarkBase,
+  type EnquiryRemarkRule,
+} from "./automation-remarks.js";
 
 const timeRe = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -6,6 +15,12 @@ export const dealerAutomationSettingsSchema = z
   .object({
     followUpSkipEnabled: z.boolean(),
     followUpSkipStartTime: z.string().regex(timeRe).nullable().optional(),
+    defaultEnquiryRemarkBase: defaultEnquiryRemarkBaseSchema.optional(),
+    enquiryRemarkRules: enquiryRemarkRulesSchema.optional(),
+    followUpSkipRemarkBases: followUpSkipRemarkBasesSchema.optional(),
+    ollamaModel: z.string().max(64).nullable().optional(),
+    enquiryTransferEnabled: z.boolean().optional(),
+    enquiryTransferStartTime: z.string().regex(timeRe).nullable().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.followUpSkipEnabled && !data.followUpSkipStartTime) {
@@ -18,6 +33,47 @@ export const dealerAutomationSettingsSchema = z
   });
 
 export type DealerAutomationSettingsPayload = z.infer<typeof dealerAutomationSettingsSchema>;
+
+export type DealerAutomationSettingsResponse = {
+  followUpSkipEnabled: boolean;
+  followUpSkipStartTime: string | null;
+  defaultEnquiryRemarkBase: string;
+  enquiryRemarkRules: EnquiryRemarkRule[];
+  followUpSkipRemarkBases: string[];
+  canEditRemarks: boolean;
+  ollamaModel: string | null;
+  enquiryTransferEnabled: boolean;
+  enquiryTransferStartTime: string | null;
+  lastScheduledRunId: string | null;
+  lastScheduledRunAt: string | null;
+};
+
+export function normalizeDealerAutomationSettingsInput(
+  body: DealerAutomationSettingsPayload,
+): {
+  followUpSkipEnabled: boolean;
+  followUpSkipStartTime: string | null;
+  defaultEnquiryRemarkBase: string;
+  enquiryRemarkRules: EnquiryRemarkRule[];
+  followUpSkipRemarkBases: string[];
+  ollamaModel?: string | null;
+  enquiryTransferEnabled?: boolean;
+  enquiryTransferStartTime?: string | null;
+} {
+  return {
+    followUpSkipEnabled: body.followUpSkipEnabled,
+    followUpSkipStartTime: body.followUpSkipEnabled ? (body.followUpSkipStartTime ?? null) : null,
+    defaultEnquiryRemarkBase: normalizeRemarkBase(body.defaultEnquiryRemarkBase ?? "Call Back"),
+    enquiryRemarkRules: normalizeEnquiryRemarkRules(body.enquiryRemarkRules ?? []),
+    followUpSkipRemarkBases: normalizeFollowUpSkipRemarkBases(body.followUpSkipRemarkBases ?? []),
+    ollamaModel: body.ollamaModel?.trim() || null,
+    enquiryTransferEnabled: body.enquiryTransferEnabled ?? false,
+    enquiryTransferStartTime:
+      body.enquiryTransferEnabled && body.enquiryTransferStartTime
+        ? body.enquiryTransferStartTime
+        : null,
+  };
+}
 
 export function parseIstTimeHHmm(value: string): { hour: number; minute: number } | null {
   const m = timeRe.exec(value.trim());

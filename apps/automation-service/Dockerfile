@@ -23,5 +23,5 @@ ENV PLAYWRIGHT_HEADED=true
 ENV DISPLAY=:99
 WORKDIR /repo/apps/automation-service
 RUN chmod +x docker-entrypoint.sh
-EXPOSE 4101 6080 6081
+EXPOSE 4101 6082-6113
 ENTRYPOINT ["./docker-entrypoint.sh"]

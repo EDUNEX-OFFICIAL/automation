@@ -1,11 +1,13 @@
 import type { BrowserContext, Page } from "playwright";
 import type { Redis } from "ioredis";
+import { browserProfileKeyForUser } from "@gdms/shared";
 import type { ExecutePayload } from "./runner.js";
 
 export type ActiveAutomationSession = {
   runId: string;
   dealerId: string;
-  /** Chromium profile key — allows parallel runs (e.g. enquiry_transfer + follow_up_skip). */
+  startedByUserId: string;
+  /** Chromium profile key — per user + operation. */
   profileKey: string;
   page: Page;
   context: BrowserContext;
@@ -14,9 +16,12 @@ export type ActiveAutomationSession = {
   stopScreenshots: () => void;
 };
 
-export function browserProfileKeyForOperation(dealerId: string, operation: string): string {
-  if (operation === "follow_up_skip") return `${dealerId}-follow-up-skip`;
-  return dealerId;
+export function browserProfileKeyForOperation(
+  dealerId: string,
+  operation: string,
+  startedByUserId: string,
+): string {
+  return browserProfileKeyForUser(dealerId, operation, startedByUserId);
 }
 
 const sessions = new Map<string, ActiveAutomationSession>();
@@ -51,16 +56,30 @@ export async function forceStopSession(runId: string): Promise<boolean> {
   return true;
 }
 
-/** Close active browser for this dealer + profile (same operation shares one profile). */
+/** Close active browsers for the same Chromium profile (same user + operation). */
+export async function closeActiveSessionsForProfile(profileKey: string): Promise<void> {
+  const toClose = [...sessions.values()].filter((s) => s.profileKey === profileKey);
+  for (const s of toClose) {
+    try {
+      s.stopScreenshots();
+      await s.context.close();
+    } catch {
+      /* ignore */
+    }
+    sessions.delete(s.runId);
+  }
+}
+
+/** @deprecated use closeActiveSessionsForProfile */
 export async function closeActiveSessionsForDealer(
   dealerId: string,
   profileKey?: string,
 ): Promise<void> {
-  const toClose = [...sessions.values()].filter((s) => {
-    if (s.dealerId !== dealerId) return false;
-    if (profileKey && s.profileKey !== profileKey) return false;
-    return true;
-  });
+  if (profileKey) {
+    await closeActiveSessionsForProfile(profileKey);
+    return;
+  }
+  const toClose = [...sessions.values()].filter((s) => s.dealerId === dealerId);
   for (const s of toClose) {
     try {
       s.stopScreenshots();

@@ -24,7 +24,12 @@ function toPlaywrightCookies(
     const out: PlaywrightCookie = {
       name: c.name,
       value: c.value,
-      domain: c.domain ?? ".hmil.net",
+      domain:
+        c.domain && /hmil\.net/i.test(c.domain)
+          ? c.domain.startsWith(".")
+            ? c.domain
+            : `.${c.domain.replace(/^\./, "")}`
+          : ".hmil.net",
       path: c.path ?? "/",
     };
     if (c.httpOnly !== undefined) out.httpOnly = c.httpOnly;
@@ -37,11 +42,11 @@ function toPlaywrightCookies(
 export async function applyGdmsBootstrapCookies(
   context: BrowserContext,
   sessionDir: string,
-  dealerId: string,
+  userId: string,
 ): Promise<boolean> {
   const redis = new Redis(env.REDIS_URL);
   try {
-    const fromRedis = await redis.get(gdmsBootstrapRedisKey(dealerId));
+    const fromRedis = await redis.get(gdmsBootstrapRedisKey(userId));
     if (fromRedis?.trim()) {
       try {
         const cookies = toPlaywrightCookies(parseGdmsBootstrapInput(fromRedis));

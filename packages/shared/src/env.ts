@@ -41,6 +41,8 @@ const apiEnvSchemaBase = z.object({
   WEBRTC_TURN_PASSWORD: z.string().optional(),
   AUTOMATION_SERVICE_URL: z.string().url().optional(),
   AI_SERVICE_URL: z.string().url().optional(),
+  /** User avatars and other uploads (created automatically). */
+  UPLOADS_DIR: z.string().default("./uploads"),
   AUTOMATION_INTERNAL_SECRET: z.string().min(16).optional(),
   /** HMIL GDMS entry URL — used when resuming workflows from the API (same as worker/automation). */
   GDMS_BASE_URL: z.string().url().optional(),

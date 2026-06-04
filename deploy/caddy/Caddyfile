@@ -1,0 +1,2 @@
+# Edge reverse proxy — one site block per file in sites.d/ (import order: numeric prefix).
+import /etc/caddy/sites.d/*.caddy

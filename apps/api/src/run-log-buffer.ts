@@ -1,8 +1,8 @@
 import type { LogLinePayload } from "@gdms/shared";
-import { runLogBufferKey } from "@gdms/shared";
+import { RUN_LOG_BUFFER_MAX_LINES, runLogBufferKey } from "@gdms/shared";
 import { redis } from "./redis.js";
 
-const MAX_LINES = 200;
+const MAX_LINES = RUN_LOG_BUFFER_MAX_LINES;
 const TTL_SEC = 86_400;
 
 export async function appendRunLogBuffer(line: LogLinePayload): Promise<void> {

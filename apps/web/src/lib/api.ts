@@ -37,14 +37,14 @@ export function getSocketIoSettings(): { uri: string; path?: string } {
           typeof window !== "undefined" ? window.location.origin : `http://127.0.0.1:${process.env.NEXT_PUBLIC_DEV_WEB_PORT ?? "3000"}`,
         path: `${sock.replace(/\/$/, "")}/socket.io`,
       };
-    return { uri: normalizeAbsoluteSocketOrigin(sock) };
+    return { uri: normalizeAbsoluteSocketOrigin(sock), path: "/socket.io" };
   }
   if (rawApi.startsWith("/"))
     return {
       uri: typeof window !== "undefined" ? window.location.origin : `http://127.0.0.1:${process.env.NEXT_PUBLIC_DEV_WEB_PORT ?? "3000"}`,
       path: `${rawApi.replace(/\/$/, "")}/socket.io`,
     };
-  return { uri: rawApi };
+  return { uri: normalizeAbsoluteSocketOrigin(rawApi), path: "/socket.io" };
 }
 
 /** Quick check that the API process is up (used before OTP submit). */
@@ -53,9 +53,7 @@ export async function checkApiHealth(): Promise<void> {
     const res = await fetch(`${getApiUrl()}/health`, { credentials: "include" });
     if (!res.ok) throw new Error(`health ${res.status}`);
   } catch {
-    throw new Error(
-      "API is not running. Stop duplicate pnpm dev processes, free port 4000, restart with a single `pnpm dev`, then submit OTP again.",
-    );
+    throw new Error("API is not running.");
   }
 }
 

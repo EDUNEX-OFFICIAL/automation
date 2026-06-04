@@ -2,79 +2,76 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatGdmsSavedAt, type GdmsAccountSummary } from "@/lib/gdms-account";
+import { ShieldCheck } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
+import { formatGdmsSavedAt, roleLabel, type GdmsAccountSummary } from "@/lib/gdms-account";
 
 type Props = {
   accounts: GdmsAccountSummary[];
   loading?: boolean;
-  selectedDealerId?: string;
-  onSelectDealer?: (dealerId: string) => void;
+  selectedUserId?: string;
+  onSelectUser?: (userId: string) => void;
+  title?: string;
 };
 
 export function GdmsSavedCredentials({
   accounts,
   loading,
-  selectedDealerId,
-  onSelectDealer,
+  selectedUserId,
+  onSelectUser,
+  title = "GDMS credentials",
 }: Props) {
-  const configured = accounts.filter((a) => a.configured);
-  const showDealerColumn = accounts.length > 1;
-
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Saved GDMS credentials</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent>
         {loading ? (
-          <p className="text-sm text-zinc-500">Loading saved credentials…</p>
-        ) : configured.length === 0 ? (
-          <p className="text-sm text-zinc-600">
-            No GDMS login saved yet. Add credentials below for your dealer.
-          </p>
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : accounts.length === 0 ? (
+          <EmptyState icon={ShieldCheck} title="No team members" />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[320px] text-left text-sm">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
-                <tr className="border-b border-zinc-200 text-zinc-500">
-                  {showDealerColumn && <th className="py-2 pr-4 font-medium">Dealer</th>}
-                  <th className="py-2 pr-4 font-medium">Username</th>
-                  <th className="py-2 pr-4 font-medium">Last saved</th>
-                  {onSelectDealer && <th className="py-2 font-medium" />}
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>GDMS login</th>
+                  <th>Last saved</th>
+                  {onSelectUser ? <th className="text-right">Action</th> : null}
                 </tr>
               </thead>
               <tbody>
-                {configured.map((row) => (
-                  <tr key={row.dealerId} className="border-b border-zinc-100 last:border-0">
-                    {showDealerColumn && (
-                      <td className="py-2.5 pr-4 font-medium text-zinc-900">{row.dealerName}</td>
-                    )}
-                    <td className="py-2.5 pr-4 font-mono text-zinc-800">{row.usernameMasked ?? "—"}</td>
-                    <td className="py-2.5 pr-4 text-zinc-600">{formatGdmsSavedAt(row.updatedAt)}</td>
-                    {onSelectDealer && (
-                      <td className="py-2.5 text-right">
+                {accounts.map((row) => (
+                  <tr key={row.userId}>
+                    <td className="font-medium text-foreground">{row.username}</td>
+                    <td className="text-muted-foreground">{roleLabel(row.role)}</td>
+                    <td className="font-mono text-foreground">
+                      {row.configured ? (row.usernameMasked ?? "Saved") : "—"}
+                    </td>
+                    <td className="text-muted-foreground">
+                      {row.configured ? formatGdmsSavedAt(row.updatedAt) : "—"}
+                    </td>
+                    {onSelectUser ? (
+                      <td className="text-right">
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          disabled={selectedDealerId === row.dealerId}
-                          onClick={() => onSelectDealer(row.dealerId)}
+                          disabled={selectedUserId === row.userId}
+                          onClick={() => onSelectUser(row.userId)}
                         >
-                          {selectedDealerId === row.dealerId ? "Editing" : "Update"}
+                          {selectedUserId === row.userId ? "Editing" : "Set creds"}
                         </Button>
                       </td>
-                    )}
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        )}
-        {!loading && accounts.some((a) => !a.configured) && configured.length > 0 && (
-          <p className="mt-3 text-xs text-zinc-500">
-            {accounts.filter((a) => !a.configured).length} dealer
-            {accounts.filter((a) => !a.configured).length === 1 ? "" : "s"} still need GDMS credentials.
-          </p>
         )}
       </CardContent>
     </Card>

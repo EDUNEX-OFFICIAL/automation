@@ -1,5 +1,6 @@
 import { getActiveSession } from "./active-sessions.js";
 import { runFollowUpSkip } from "./follow-up-skip.js";
+import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import { createPrisma } from "@gdms/database";
 import { Redis } from "ioredis";
@@ -62,11 +63,13 @@ export async function retryFollowUpSkip(runId: string): Promise<void> {
       data: { status: "RUNNING", errorMessage: null, endedAt: null },
     });
     await log("info", "Continuing Follow Up Skip on open browser session.");
+    const remarkConfig = await loadDealerRemarkConfig(dealerId);
     await runFollowUpSkip({
       page,
       runId,
       dealerId,
       redis: redisClient,
+      followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
       log,
       shouldStop,
       waitIfPaused,

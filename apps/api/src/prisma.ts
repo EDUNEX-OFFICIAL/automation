@@ -1,3 +1,3 @@
-import { createPrisma } from "@gdms/database";
+import { createPrisma, type PrismaClient } from "@gdms/database";
 
-export const prisma = createPrisma();
+export const prisma: PrismaClient = createPrisma();

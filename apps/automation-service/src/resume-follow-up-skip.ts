@@ -2,7 +2,7 @@ import path from "node:path";
 import { Redis } from "ioredis";
 import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
-import { displayForOperation } from "@gdms/shared";
+import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
 import {
   browserProfileKeyForOperation,
@@ -11,6 +11,7 @@ import {
   registerActiveSession,
 } from "./active-sessions.js";
 import { runFollowUpSkip } from "./follow-up-skip.js";
+import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import {
   attachInputGuardListeners,
@@ -64,7 +65,11 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
 
   const redisClient = new Redis(env.REDIS_URL);
   const { runId, dealerId } = payload;
-  const profileKey = browserProfileKeyForOperation(dealerId, payload.operation);
+  const profileKey = browserProfileKeyForOperation(
+    dealerId,
+    payload.operation,
+    payload.startedByUserId,
+  );
 
   const log = async (level: LogLinePayload["level"], message: string) => {
     await publish(redisClient, SocketEvents.LOG_LINE, dealerId, {
@@ -78,13 +83,17 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
   const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
   await closeActiveSessionsForDealer(dealerId, profileKey);
   const context = await launchGdmsPersistentContext(sessionDir, {
-    display: displayForOperation(payload.operation),
+    display: displayForUserOperation(payload.startedByUserId, payload.operation),
   });
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (m) => void log("warn", m));
 
-  const bootstrapCookiesApplied = await applyGdmsBootstrapCookies(context, sessionDir, dealerId);
+  const bootstrapCookiesApplied = await applyGdmsBootstrapCookies(
+    context,
+    sessionDir,
+    payload.startedByUserId,
+  );
   if (bootstrapCookiesApplied) {
     await log("info", "GDMS bootstrap cookies applied on resume.");
   }
@@ -105,6 +114,7 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
   registerActiveSession({
     runId,
     dealerId,
+    startedByUserId: payload.startedByUserId,
     profileKey,
     page,
     context,
@@ -161,11 +171,13 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
       throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
     };
 
+    const remarkConfig = await loadDealerRemarkConfig(dealerId);
     await runFollowUpSkip({
       page,
       runId,
       dealerId,
       redis: redisClient,
+      followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
       log,
       shouldStop: () => isStopped(redisClient, runId),
       waitIfPaused: () => waitIfPaused(redisClient, runId),

@@ -1,4 +1,4 @@
-import type { WorkflowRun, WorkflowRunStatus } from "@prisma/client";
+import type { WorkflowRun, WorkflowRunStatus } from "@gdms/database";
 import { prisma } from "../prisma.js";
 import { workflowQueue } from "../queue.js";
 import { isWatchdogActive } from "../redis.js";
@@ -63,6 +63,14 @@ async function workflowWorkerCount(): Promise<number> {
 
 const PENDING_GRACE_MS = 8_000;
 
+/** Bull marks the workflow job completed as soon as automation accepts HTTP 202 — not when Playwright finishes. */
+const RUNNING_SESSION_GRACE_MS = 30 * 60_000;
+
+/** RUNNING enquiry transfer can run for hours; only reconcile-stale may end orphaned rows after this. */
+const RUNNING_MAX_AGE_MS = 12 * 60 * 60_000;
+
+const WATCHDOG_MAX_AGE_MS = 60_000;
+
 const WORKER_NOT_PROCESSING_MESSAGE =
   "Automation worker did not pick up this run. On the server, ensure @gdms/worker and @gdms/automation-service are running and share the same REDIS_URL as the API.";
 
@@ -71,7 +79,7 @@ export async function isWorkflowRunLive(
   run: { id: string; status: WorkflowRunStatus; startedAt: Date },
 ): Promise<boolean> {
   if (await fetchAutomationSessionActive(run.id)) return true;
-  if (await isWatchdogActive(run.id)) return true;
+  if (await isWatchdogActive(run.id, WATCHDOG_MAX_AGE_MS)) return true;
 
   const ageMs = Date.now() - run.startedAt.getTime();
 
@@ -97,8 +105,10 @@ export async function isWorkflowRunLive(
   }
 
   if (run.status === "RUNNING") {
-    if (await isBullJobStillQueued(run.id)) return true;
-    if (ageMs < 5 * 60_000) return true;
+    if (ageMs < RUNNING_SESSION_GRACE_MS) return true;
+    if (ageMs < RUNNING_MAX_AGE_MS) {
+      return fetchAutomationSessionActive(run.id);
+    }
     return false;
   }
 
@@ -124,6 +134,7 @@ export async function reconcileStaleWorkflowRunsForDealer(dealerId: string): Pro
   const requeuedRunIds: string[] = [];
 
   for (const run of inFlight) {
+    if (run.status === "PAUSED_OTP") continue;
     if (await isWorkflowRunLive(run)) continue;
 
     if (run.status === "PENDING") {
@@ -175,6 +186,7 @@ const HEAL_ON_READ_STATUSES: WorkflowRunStatus[] = ["PENDING", "RUNNING", "PAUSE
 /** Re-queue orphan PENDING runs or stop stale RUNNING rows when polled by Live session. */
 export async function healWorkflowRunOnRead(run: WorkflowRun): Promise<WorkflowRun> {
   if (!HEAL_ON_READ_STATUSES.includes(run.status)) return run;
+  if (run.status === "PAUSED_OTP") return run;
   if (await isWorkflowRunLive(run)) return run;
 
   if (run.status === "PENDING") {
@@ -191,12 +203,6 @@ export async function healWorkflowRunOnRead(run: WorkflowRun): Promise<WorkflowR
     return prisma.workflowRun.findUnique({ where: { id: run.id } }).then((r) => r ?? run);
   }
 
-  return prisma.workflowRun.update({
-    where: { id: run.id },
-    data: {
-      status: "STOPPED",
-      endedAt: new Date(),
-      errorMessage: STALE_END_MESSAGE,
-    },
-  });
+  // RUNNING rows are only cleared via POST reconcile-stale — never on Live session poll.
+  return run;
 }
