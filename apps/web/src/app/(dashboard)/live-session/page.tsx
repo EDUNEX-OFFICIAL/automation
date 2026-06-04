@@ -56,7 +56,6 @@ export default function LiveSessionPage() {
   const token = useAuthStore((s) => s.accessToken);
   const userId = useAuthStore((s) => s.user?.id);
   const runId = useLiveStore((s) => s.runId);
-  const frame = useLiveStore((s) => s.frameBase64);
   const lastStep = useLiveStore((s) => s.lastStep);
   const logs = useLiveStore((s) => s.logs);
   const realtimeConnected = useLiveStore((s) => s.realtimeConnected);
@@ -387,16 +386,18 @@ export default function LiveSessionPage() {
     : !realtimeConnected
       ? "Connecting…"
       : runStopped
-        ? "Preview ended."
+        ? "Remote view ended."
         : runFailed || runPausedUser
           ? friendlyError ?? "Needs attention."
           : runRow?.status === "RUNNING"
-            ? frame
-              ? "Live preview."
-              : "Starting preview…"
+            ? gdmsBrowserUrl
+              ? "Live noVNC view."
+              : "Starting remote view…"
             : runRow?.status === "PENDING"
               ? "Queued…"
-              : "Waiting for preview…";
+              : gdmsBrowserUrl
+                ? "noVNC ready."
+                : "Waiting for noVNC…";
 
   const showPostLogin = workflowDone || runRow?.status === "COMPLETED";
   const canContinueWhileRunning =
@@ -615,7 +616,7 @@ export default function LiveSessionPage() {
           <CardHeader className="space-y-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <CardTitle>Browser preview</CardTitle>
+                <CardTitle>noVNC workspace</CardTitle>
               </div>
               {vncWorkspaces.length > 0 ? (
                 <div className="flex shrink-0 flex-col gap-1">
@@ -638,32 +639,18 @@ export default function LiveSessionPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {runId && frame ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                alt="live"
-                className="h-[min(52vh,520px)] w-full rounded border border-border object-contain bg-black"
-                src={`data:image/jpeg;base64,${frame}`}
-              />
-            ) : null}
             {gdmsBrowserUrl && vncWorkspaces.length > 0 ? (
-              <>
-                <iframe
-                  title={`GDMS noVNC workspace ${previewWorkspace}`}
-                  src={gdmsBrowserUrl}
-                  className={cn(
-                    "w-full rounded border border-border bg-black",
-                    runId && frame ? "h-48" : "h-[min(52vh,520px)]",
-                  )}
-                  allow="clipboard-read; clipboard-write"
-                />
-              </>
-            ) : null}
-            {!frame && !(gdmsBrowserUrl && vncWorkspaces.length > 0) ? (
+              <iframe
+                title={`GDMS noVNC workspace ${previewWorkspace}`}
+                src={gdmsBrowserUrl}
+                className="h-[min(52vh,520px)] w-full rounded border border-border bg-black"
+                allow="clipboard-read; clipboard-write"
+              />
+            ) : (
               <div className="flex h-64 flex-col items-center justify-center gap-2 rounded bg-muted px-4 text-center text-sm text-muted-foreground">
                 <p>{previewHint}</p>
               </div>
-            ) : null}
+            )}
           </CardContent>
         </Card>
 

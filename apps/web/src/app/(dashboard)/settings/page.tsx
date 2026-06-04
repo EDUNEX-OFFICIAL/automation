@@ -13,6 +13,7 @@ import { StatusBanner } from "@/components/ui/status-banner";
 import { apiFetch } from "@/lib/api";
 import type { GdmsAccountSummary } from "@/lib/gdms-account";
 import { toUserMessage } from "@/lib/user-messages";
+import { canEditScheduleSettings } from "@/lib/roles";
 import { signOut as authSignOut } from "@/lib/auth-session";
 import { useAuthStore } from "@/stores/auth-store";
 import type { UserInfo } from "@/stores/auth-store";
@@ -73,10 +74,25 @@ export default function SettingsPage() {
 
   const showRemarkSettings =
     user?.role === "TEAM_LEADER" || user?.role === "DEALER_ADMIN";
+  const showScheduleSettings = canEditScheduleSettings(user?.role);
+  const showWorkflowsTab = user?.role === "DEALER_ADMIN";
+  const showAiTab = user?.role === "DEALER_ADMIN";
 
   useEffect(() => {
     if (!token) router.replace("/login");
   }, [token, router]);
+
+  useEffect(() => {
+    if (!user) return;
+    const allowed = new Set([
+      "gdms",
+      ...(showScheduleSettings ? ["schedule"] : []),
+      ...(showRemarkSettings ? ["remarks"] : []),
+      ...(showWorkflowsTab ? ["workflows"] : []),
+      ...(showAiTab ? ["ai"] : []),
+    ]);
+    if (!allowed.has(settingsTab)) setSettingsTab("gdms");
+  }, [user, settingsTab, showScheduleSettings, showRemarkSettings, showWorkflowsTab, showAiTab]);
 
   useEffect(() => {
     if (!token) return;
@@ -349,10 +365,10 @@ export default function SettingsPage() {
         onChange={setSettingsTab}
         tabs={[
           { id: "gdms", label: "GDMS" },
-          { id: "schedule", label: "Schedule" },
+          ...(showScheduleSettings ? [{ id: "schedule", label: "Schedule" }] : []),
           ...(showRemarkSettings ? [{ id: "remarks", label: "Remarks" }] : []),
-          { id: "workflows", label: "Workflows" },
-          { id: "ai", label: "AI calling" },
+          ...(showWorkflowsTab ? [{ id: "workflows", label: "Workflows" }] : []),
+          ...(showAiTab ? [{ id: "ai", label: "AI calling" }] : []),
         ]}
       />
 
@@ -442,7 +458,7 @@ export default function SettingsPage() {
             />
           ) : null}
 
-          {settingsTab === "schedule" ? (
+          {settingsTab === "schedule" && showScheduleSettings ? (
           <Card>
             <CardHeader>
               <CardTitle>Follow Up Skip (Today&apos;s Follow Up)</CardTitle>

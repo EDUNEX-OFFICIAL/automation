@@ -54,6 +54,11 @@ export function canManageUsersPage(role: string | undefined): boolean {
   return role === "DEALER_ADMIN" || role === "TEAM_LEADER";
 }
 
+/** Follow Up Skip schedule on Settings — not available to Sales Consultant. */
+export function canEditScheduleSettings(role: string | undefined): boolean {
+  return role === "TEAM_LEADER" || role === "DEALER_ADMIN";
+}
+
 export function navForRole(role: string | undefined): NavItem[] {
   return navSectionsForRole(role).flatMap((s) => s.items);
 }

@@ -44,9 +44,9 @@ export function canEditTeamGdmsSecrets(role: Role): boolean {
   return role === "DEALER_ADMIN";
 }
 
-/** Dealer-wide Follow Up Skip schedule (Settings). */
+/** Dealer-wide Follow Up Skip schedule (Settings) — Team Leader and Dealer Admin only. */
 export function canEditDealerAutomationSettings(role: Role): boolean {
-  return canRunAutomation(role) || role === "DEALER_ADMIN";
+  return role === "TEAM_LEADER" || role === "DEALER_ADMIN";
 }
 
 /** Enquiry / follow-up remark rules on Settings (TL + Dealer Admin only). */
