@@ -19,7 +19,15 @@ export function assertEnquiryTransferBrowserMode(): void {
   }
 }
 
-export const gdmsChromiumLaunchArgs = (): string[] => [
+export const gdmsChromiumLaunchArgs = (remoteView = false): string[] => [
   "--no-sandbox",
   "--disable-dev-shm-usage",
+  ...(remoteView
+    ? [
+        "--start-maximized",
+        "--window-position=0,0",
+        "--disable-infobars",
+        "--disable-session-crashed-bubble",
+      ]
+    : []),
 ];

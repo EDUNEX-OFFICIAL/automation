@@ -39,11 +39,7 @@ start_vnc_workspace() {
 
   start_xvfb "$display"
 
-  if command -v fluxbox >/dev/null 2>&1; then
-    fluxbox -display "$display" >/dev/null 2>&1 &
-  fi
-
-  mkdir -p /tmp/.vnc
+  # Skip fluxbox — its top toolbar steals pixels and clips Chromium in noVNC.
   x11vnc -storepasswd "$vnc_pass" /tmp/.vnc/passwd >/dev/null
 
   if ! pgrep -f "x11vnc.*-display $display" >/dev/null 2>&1; then

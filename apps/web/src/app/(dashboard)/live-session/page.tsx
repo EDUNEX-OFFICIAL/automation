@@ -663,7 +663,7 @@ export default function LiveSessionPage() {
                   key={vncFrameKey}
                   title={`GDMS noVNC workspace ${previewWorkspace}`}
                   src={gdmsBrowserUrl}
-                  className="h-[min(52vh,520px)] w-full rounded border border-border bg-black"
+                  className="h-[min(75vh,900px)] w-full rounded border border-border bg-black"
                   allow="clipboard-read; clipboard-write"
                 />
                 <div className="flex justify-end">
