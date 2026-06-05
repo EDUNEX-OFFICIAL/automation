@@ -73,6 +73,7 @@ export default function LiveSessionPage() {
   const [controlNotice, setControlNotice] = useState<string | null>(null);
   const [endedRun, setEndedRun] = useState<WorkflowRunRow | null>(null);
   const [resuming, setResuming] = useState(false);
+  const [vncFrameKey, setVncFrameKey] = useState(0);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -406,12 +407,22 @@ export default function LiveSessionPage() {
       logs.some((l) => /still waiting for dashboard/i.test(l.message)));
   const pendingAgeMs =
     runRow?.status === "PENDING" && pendingSince != null ? Date.now() - pendingSince : 0;
+  const runAgeMs = runRow?.startedAt ? Date.now() - Date.parse(runRow.startedAt) : 0;
   const showRequeue =
     !!runId && runRow?.status === "PENDING" && pendingAgeMs > 20_000 && !requeuing;
+  const runLostBrowser =
+    !!runId &&
+    runRow?.status === "RUNNING" &&
+    !sessionActive &&
+    runAgeMs > 15_000;
   const canRetryTransfer =
     !!runId &&
     !retrying &&
-    (runFailed || runPausedUser || canContinueWhileRunning || (sessionActive && runRow?.status === "RUNNING"));
+    (runFailed ||
+      runPausedUser ||
+      canContinueWhileRunning ||
+      runLostBrowser ||
+      (sessionActive && runRow?.status === "RUNNING"));
   const retryButtonLabel = !sessionActive
     ? "Resume saved session"
     : runRow?.status === "RUNNING"
@@ -477,6 +488,13 @@ export default function LiveSessionPage() {
 
       {runRow?.status === "PENDING" && pendingAgeMs > 20_000 ? (
         <StatusBanner variant="warning" title="Still queued" />
+      ) : null}
+
+      {runLostBrowser ? (
+        <StatusBanner variant="warning" title="Browser session lost">
+          The remote GDMS browser is not connected (often after a server restart). Press{" "}
+          <strong>{retryButtonLabel}</strong> below, or Stop and start again from Dashboard.
+        </StatusBanner>
       ) : null}
 
       {controlNotice ? (
@@ -640,12 +658,24 @@ export default function LiveSessionPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             {gdmsBrowserUrl && vncWorkspaces.length > 0 ? (
-              <iframe
-                title={`GDMS noVNC workspace ${previewWorkspace}`}
-                src={gdmsBrowserUrl}
-                className="h-[min(52vh,520px)] w-full rounded border border-border bg-black"
-                allow="clipboard-read; clipboard-write"
-              />
+              <>
+                <iframe
+                  key={vncFrameKey}
+                  title={`GDMS noVNC workspace ${previewWorkspace}`}
+                  src={gdmsBrowserUrl}
+                  className="h-[min(52vh,520px)] w-full rounded border border-border bg-black"
+                  allow="clipboard-read; clipboard-write"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setVncFrameKey((k) => k + 1)}
+                  >
+                    Reconnect noVNC
+                  </Button>
+                </div>
+              </>
             ) : (
               <div className="flex h-64 flex-col items-center justify-center gap-2 rounded bg-muted px-4 text-center text-sm text-muted-foreground">
                 <p>{previewHint}</p>
