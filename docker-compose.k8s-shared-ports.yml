@@ -1,0 +1,10 @@
+# Re-expose shared Postgres/Redis for k3s apps (VahanPlus) on the Hostinger VPS.
+# automation prod overlay resets host ports; this file restores them.
+services:
+  postgres:
+    ports:
+      - '0.0.0.0:54322:5432'
+
+  redis:
+    ports:
+      - '0.0.0.0:6380:6379'

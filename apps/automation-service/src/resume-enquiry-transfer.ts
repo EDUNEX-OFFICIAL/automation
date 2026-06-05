@@ -5,6 +5,7 @@ import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms
 import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
 import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
+import { startGdmsBrowserWindowGeometryRefresh } from "./gdms-browser-window-geometry.js";
 import {
   closeActiveSessionsForDealer,
   getActiveSession,
@@ -88,6 +89,7 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
     display: vncDisplay,
   });
   startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+  startGdmsBrowserWindowGeometryRefresh(vncDisplay);
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (message) => {

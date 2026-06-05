@@ -661,7 +661,7 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     const buildUrl = (pathPrefix: string): string => {
       const q = new URLSearchParams({
         autoconnect: "true",
-        resize: "remote",
+        resize: "scale",
         path: `${pathPrefix}/websockify`,
         password,
         reconnect: "true",

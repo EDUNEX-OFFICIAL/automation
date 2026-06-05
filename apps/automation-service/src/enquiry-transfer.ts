@@ -1,5 +1,5 @@
 import type { Redis } from "ioredis";
-import type { Page, Locator } from "playwright";
+import type { Frame, Page, Locator } from "playwright";
 import type { LogLinePayload } from "@gdms/shared";
 import {
   formatAutomationRemark,
@@ -1465,16 +1465,20 @@ async function isInKendoDataGrid(loc: Locator): Promise<boolean> {
 }
 
 /** Editable Follow Up fields block (excludes history grid at bottom). */
-async function resolveFollowUpFieldsContainer(formRoot: Locator): Promise<Locator> {
+async function resolveFollowUpFieldsContainer(page: Page, modal: Locator): Promise<Locator> {
   try {
-    const remarks = await resolveFollowUpRemarksInput(formRoot);
-    const box = remarks.locator(
-      "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
-    );
-    if (await box.isVisible({ timeout: 2_000 }).catch(() => false)) return box;
+    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
+      const remarks = await tryResolveFollowUpRemarksInRoot(root);
+      if (!remarks) continue;
+      const box = remarks.locator(
+        "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
+      );
+      if (await box.isVisible({ timeout: 2_000 }).catch(() => false)) return box;
+    }
   } catch {
     /* fall through */
   }
+  const formRoot = await enquiryModalFormRoot(modal);
   const history = formRoot.getByText(/^Follow Up History/i).first();
   if (await history.isVisible({ timeout: 1_500 }).catch(() => false)) {
     const section = history.locator(
@@ -2254,9 +2258,8 @@ async function selectEnquiryTypeColdOnce(
 
 const FOLLOW_UP_TYPE_LABEL_RE = /^Follow Up Type$/i;
 
-async function isFollowUpTabReadyExceptEnquiryType(modal: Locator): Promise<boolean> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  if (!(await isFollowUpRemarksFilled(formRoot))) return false;
+async function isFollowUpTabReadyExceptEnquiryType(page: Page, modal: Locator): Promise<boolean> {
+  if (!(await isFollowUpRemarksFilled(page, modal))) return false;
   const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
   if (!/^phone$/i.test(followType.trim())) return false;
   const nextType = await readDropdownDisplayNearLabel(modal, /Next Follow Up Type/i);
@@ -2266,10 +2269,9 @@ async function isFollowUpTabReadyExceptEnquiryType(modal: Locator): Promise<bool
   return isNextFollowUpTimeFilled(modal);
 }
 
-async function describeFollowUpReadiness(modal: Locator): Promise<string> {
-  const formRoot = await enquiryModalFormRoot(modal);
+async function describeFollowUpReadiness(page: Page, modal: Locator): Promise<string> {
   const parts: string[] = [];
-  parts.push(`remarks=${(await isFollowUpRemarksFilled(formRoot)) ? "ok" : "missing"}`);
+  parts.push(`remarks=${(await isFollowUpRemarksFilled(page, modal)) ? "ok" : "missing"}`);
   parts.push(
     `followUpType="${(await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim() || "(empty)"}"`,
   );
@@ -2301,14 +2303,21 @@ async function followUpEnquiryTypeThenSaveOnly(
   await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
-async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
+async function isFollowUpRemarksFilled(page: Page, modal: Locator): Promise<boolean> {
+  const domVal = (await readFollowUpRemarksValueViaDom(page)).trim();
+  if (isAutomationRemarkFilled(domVal)) return true;
+
   try {
-    const remarks = await resolveFollowUpRemarksInput(formRoot);
-    const t = (await remarks.inputValue().catch(() => "")).trim();
-    return isAutomationRemarkFilled(t);
+    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
+      const remarks = await tryResolveFollowUpRemarksInRoot(root);
+      if (!remarks) continue;
+      const t = (await remarks.inputValue().catch(() => "")).trim();
+      if (isAutomationRemarkFilled(t)) return true;
+    }
   } catch {
     return false;
   }
+  return false;
 }
 
 async function isNextFollowUpTimeFilled(modal: Locator): Promise<boolean> {
@@ -2606,8 +2615,8 @@ async function clickSaveButton(target: Locator, log: EnquiryTransferContext["log
 }
 
 /** Follow Up form complete: remarks, Phone, Y, time, Enquiry Type = Cold (display on form). */
-async function isFollowUpReadyForSave(modal: Locator): Promise<boolean> {
-  if (!(await isFollowUpTabReadyExceptEnquiryType(modal))) return false;
+async function isFollowUpReadyForSave(page: Page, modal: Locator): Promise<boolean> {
+  if (!(await isFollowUpTabReadyExceptEnquiryType(page, modal))) return false;
   return isEnquiryTypeDisplayCold(modal);
 }
 
@@ -2678,14 +2687,14 @@ async function waitForFollowUpReadyForSave(
   await dismissTransientKendoPopups(page);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isFollowUpReadyForSave(modal)) {
+    if (await isFollowUpReadyForSave(page, modal)) {
       await log("info", "Follow Up data complete — ready for Save (#btnFollowUpSave).");
       return;
     }
     await dismissTransientKendoPopups(page);
     await pollDelay(350);
   }
-  throw new Error(`Follow Up not ready for Save (${await describeFollowUpReadiness(modal)}).`);
+  throw new Error(`Follow Up not ready for Save (${await describeFollowUpReadiness(page, modal)}).`);
 }
 
 async function waitBeforeFollowUpSave(log: EnquiryTransferContext["log"]): Promise<void> {
@@ -3238,20 +3247,302 @@ async function navigateCalendarToDate(
   }
 }
 
-async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> {
-  const label = formRoot.locator("dt, th, td, label").filter({ hasText: /^Follow Up Remarks/i }).first();
-  if (await label.isVisible({ timeout: 3_000 }).catch(() => false)) {
+const FOLLOW_UP_REMARKS_LABEL_RE = /\*?\s*Follow Up Remarks/i;
+const REMARK_INPUT_SELECTOR =
+  "textarea, input[type='text']:not([readonly]):not([disabled])";
+
+type RemarkSearchRoot = Page | Frame | Locator;
+
+async function enumerateRemarkSearchRoots(page: Page, modal: Locator): Promise<RemarkSearchRoot[]> {
+  const roots: RemarkSearchRoot[] = [page, ...page.frames(), modal];
+  roots.push(await enquiryModalFormRoot(modal));
+  const iframeCount = await modal.locator("iframe").count().catch(() => 0);
+  for (let i = 0; i < iframeCount; i++) {
+    roots.push(modal.frameLocator(`iframe >> nth=${i}`).locator("body"));
+  }
+  return roots;
+}
+
+async function scrollToFollowUpRemarksSectionInRoot(root: RemarkSearchRoot): Promise<void> {
+  const section = root
+    .locator("dt, th, td, label, span, h3, h4, legend")
+    .filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE })
+    .first();
+  if (await section.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await section.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
+    await humanDelay(400, 800);
+  }
+}
+
+async function tryResolveFollowUpRemarksInRoot(root: RemarkSearchRoot): Promise<Locator | null> {
+  await scrollToFollowUpRemarksSectionInRoot(root);
+
+  const label = root.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+  if (await label.isVisible({ timeout: 2_000 }).catch(() => false)) {
     const row = label.locator("xpath=ancestor::tr[1]");
-    const inRow = row.locator("textarea").first();
+    const inRow = row.locator(REMARK_INPUT_SELECTOR).first();
     if (await inRow.isVisible({ timeout: 1_500 }).catch(() => false)) return inRow;
     const dd = label.locator("xpath=following-sibling::dd[1]");
-    const inDd = dd.locator("textarea").first();
+    const inDd = dd.locator(REMARK_INPUT_SELECTOR).first();
     if (await inDd.isVisible({ timeout: 1_500 }).catch(() => false)) return inDd;
-    const following = label.locator("xpath=following::textarea[1]");
-    if (await following.isVisible({ timeout: 1_500 }).catch(() => false)) return following;
+    const followingTextarea = label.locator("xpath=following::textarea[1]");
+    if (await followingTextarea.isVisible({ timeout: 1_000 }).catch(() => false)) return followingTextarea;
+    const followingInput = label.locator("xpath=following::input[@type='text'][1]");
+    if (await followingInput.isVisible({ timeout: 1_000 }).catch(() => false)) return followingInput;
   }
-  const byLabel = formRoot.getByLabel(/Follow Up Remarks/i).first();
-  if (await byLabel.isVisible({ timeout: 2_000 }).catch(() => false)) return byLabel;
+
+  const rowWithLabel = root.locator("tr").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+  if (await rowWithLabel.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    const inRow = rowWithLabel.locator(REMARK_INPUT_SELECTOR).first();
+    if (await inRow.isVisible({ timeout: 1_500 }).catch(() => false)) return inRow;
+  }
+
+  const byLabel = root.getByLabel(FOLLOW_UP_REMARKS_LABEL_RE).first();
+  if (await byLabel.isVisible({ timeout: 1_500 }).catch(() => false)) return byLabel;
+
+  const byName = root
+    .locator(
+      "textarea[name*='Remark' i], textarea[id*='Remark' i], input[type='text'][name*='Remark' i], input[type='text'][id*='Remark' i]",
+    )
+    .first();
+  if (await byName.isVisible({ timeout: 1_000 }).catch(() => false)) return byName;
+
+  const inputs = root.locator(REMARK_INPUT_SELECTOR);
+  const n = await inputs.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const inp = inputs.nth(i);
+    if (!(await inp.isVisible({ timeout: 500 }).catch(() => false))) continue;
+    const nearRemarks = await inp
+      .evaluate((el) => {
+        let node: HTMLElement | null = el as HTMLElement;
+        for (let d = 0; d < 15 && node; d++) {
+          const text = (node.textContent ?? "").replace(/\s+/g, " ");
+          if (/\*?\s*follow\s*up\s*remarks/i.test(text) && !/scheme\s*offered/i.test(text)) return true;
+          node = node.parentElement;
+        }
+        return false;
+      })
+      .catch(() => false);
+    if (nearRemarks) return inp;
+  }
+
+  return null;
+}
+
+async function readFollowUpRemarksValueViaDom(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const isRemarksLabel = (t: string) => /\*?\s*follow\s*up\s*remarks/i.test(t.replace(/\s+/g, " "));
+    const isScheme = (t: string) => /scheme\s*offered/i.test(t);
+
+    function pickInput(container: Element): HTMLTextAreaElement | HTMLInputElement | null {
+      for (const el of Array.from(container.querySelectorAll("textarea, input[type='text']"))) {
+        if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) continue;
+        if (el.disabled || el.readOnly) continue;
+        const ctx = (el.closest("tr, dl, dd, div")?.textContent ?? "").replace(/\s+/g, " ");
+        if (isScheme(ctx) && !isRemarksLabel(ctx)) continue;
+        return el;
+      }
+      return null;
+    }
+
+    function searchIn(root: ParentNode): string {
+      const labels = Array.from(root.querySelectorAll("dt, th, td, label, span, legend"));
+      for (const label of labels) {
+        const labelText = (label.textContent ?? "").replace(/\s+/g, " ");
+        if (!isRemarksLabel(labelText)) continue;
+        if (label.tagName === "DT") {
+          const dd = label.nextElementSibling;
+          if (dd) {
+            const el = pickInput(dd);
+            if (el) return el.value ?? "";
+          }
+        }
+        const row = label.closest("tr");
+        if (row) {
+          const el = pickInput(row);
+          if (el) return el.value ?? "";
+        }
+      }
+      return "";
+    }
+
+    const hosts: ParentNode[] = [document];
+    for (const win of Array.from(document.querySelectorAll(".k-window, [role='dialog']"))) {
+      if (!/SALES CUSTOMER ENQUIRY INFO/i.test(win.textContent ?? "")) continue;
+      hosts.push(win);
+      for (const iframe of Array.from(win.querySelectorAll("iframe"))) {
+        try {
+          const doc = (iframe as HTMLIFrameElement).contentDocument;
+          if (doc?.body) hosts.push(doc.body);
+        } catch {
+          /* cross-origin */
+        }
+      }
+    }
+    for (const host of hosts) {
+      const val = searchIn(host);
+      if (val) return val;
+    }
+    return "";
+  });
+}
+
+async function fillFollowUpRemarksViaDom(
+  page: Page,
+  remarkText: string,
+  log: EnquiryTransferContext["log"],
+): Promise<boolean> {
+  const ok = await page.evaluate((text) => {
+    const isRemarksLabel = (t: string) => /\*?\s*follow\s*up\s*remarks/i.test(t.replace(/\s+/g, " "));
+    const isScheme = (t: string) => /scheme\s*offered/i.test(t);
+
+    function pickInput(container: Element): HTMLTextAreaElement | HTMLInputElement | null {
+      for (const el of Array.from(container.querySelectorAll("textarea, input[type='text']"))) {
+        if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) continue;
+        if (el.disabled || el.readOnly) continue;
+        const ctx = (el.closest("tr, dl, dd, div")?.textContent ?? "").replace(/\s+/g, " ");
+        if (isScheme(ctx) && !isRemarksLabel(ctx)) continue;
+        return el;
+      }
+      return null;
+    }
+
+    function searchAndFill(root: ParentNode): boolean {
+      const labels = Array.from(root.querySelectorAll("dt, th, td, label, span, legend"));
+      for (const label of labels) {
+        const labelText = (label.textContent ?? "").replace(/\s+/g, " ");
+        if (!isRemarksLabel(labelText)) continue;
+        let el: HTMLTextAreaElement | HTMLInputElement | null = null;
+        if (label.tagName === "DT") {
+          const dd = label.nextElementSibling;
+          if (dd) el = pickInput(dd);
+        }
+        if (!el) {
+          const row = label.closest("tr");
+          if (row) el = pickInput(row);
+        }
+        if (!el) continue;
+        el.focus();
+        el.value = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      return false;
+    }
+
+    const hosts: ParentNode[] = [document];
+    for (const win of Array.from(document.querySelectorAll(".k-window, [role='dialog']"))) {
+      if (!/SALES CUSTOMER ENQUIRY INFO/i.test(win.textContent ?? "")) continue;
+      hosts.push(win);
+      for (const iframe of Array.from(win.querySelectorAll("iframe"))) {
+        try {
+          const doc = (iframe as HTMLIFrameElement).contentDocument;
+          if (doc?.body) hosts.push(doc.body);
+        } catch {
+          /* cross-origin */
+        }
+      }
+    }
+    for (const host of hosts) {
+      if (searchAndFill(host)) return true;
+    }
+    return false;
+  }, remarkText);
+
+  if (ok) {
+    await log("info", `Follow Up Remarks set via DOM fallback ("${remarkText}").`);
+  }
+  return ok;
+}
+
+async function resolveFollowUpRemarksInput(
+  page: Page,
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<Locator> {
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    await ensureFollowUpTabActive(modal);
+    await humanDelay(500, 900);
+
+    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
+      const found = await tryResolveFollowUpRemarksInRoot(root);
+      if (found) return found;
+    }
+
+    if (log && attempt < 12) {
+      await log("info", `Follow Up Remarks field not ready yet — waiting (attempt ${attempt}/12).`);
+    }
+    await humanDelay(900, 1_600);
+  }
+  throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
+}
+
+async function ensureFollowUpTabOpen(
+  page: Page,
+  modal: Locator,
+  log: EnquiryTransferContext["log"],
+): Promise<Locator> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    await ensureFollowUpTabActive(modal);
+    await pause(attempt === 1 ? "short" : "normal");
+
+    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
+      const remarks = await tryResolveFollowUpRemarksInRoot(root);
+      if (remarks) return formRoot;
+      const typeHint = root
+        .locator("dt, th, td, label, span")
+        .filter({ hasText: /Follow Up Type/i })
+        .first();
+      if (await typeHint.isVisible({ timeout: 1_500 }).catch(() => false)) return formRoot;
+    }
+
+    await log("info", `Follow Up tab still loading — retry open (${attempt}/6).`);
+    await humanDelay(700, 1_200);
+  }
+  return formRoot;
+}
+
+async function fillFollowUpRemarksField(
+  page: Page,
+  modal: Locator,
+  remarkText: string,
+  log: EnquiryTransferContext["log"],
+): Promise<void> {
+  if (await isFollowUpRemarksFilled(page, modal)) {
+    await log("info", "Follow Up Remarks already set (automation suffix) — skipping re-type.");
+    return;
+  }
+
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    await ensureFollowUpTabActive(modal);
+    await humanDelay(500, 900);
+
+    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
+      const remarks = await tryResolveFollowUpRemarksInRoot(root);
+      if (!remarks) continue;
+      await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+      await withModalInputBypass(modal, async () => {
+        await remarks.click();
+        await remarks.fill("");
+        await remarks.pressSequentially(remarkText, { delay: scaledRandomBetween(80, 140) });
+      });
+      await log("info", `Follow Up Remarks set to "${remarkText}" (Scheme Offered left empty).`);
+      await pause("normal");
+      return;
+    }
+
+    if (await fillFollowUpRemarksViaDom(page, remarkText, log)) {
+      await pause("normal");
+      return;
+    }
+
+    if (attempt < 12) {
+      await log("info", `Follow Up Remarks field not ready yet — waiting (attempt ${attempt}/12).`);
+      await humanDelay(900, 1_500);
+    }
+  }
   throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
 }
 
@@ -3263,7 +3554,7 @@ async function fillFollowUpRemarksForSkip(
   log: EnquiryTransferContext["log"],
   remarkText: string,
 ): Promise<void> {
-  const remarks = await resolveFollowUpRemarksInput(formRoot);
+  const remarks = await resolveFollowUpRemarksInput(page, modal, log);
   await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
 
   await withModalInputBypass(modal, async () => {
@@ -3360,11 +3651,9 @@ async function setNextFollowUpTime(
 
 async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"], ctx: EnquiryTransferContext): Promise<void> {
   const modal = await visibleEnquiryModal(page);
-  const formRoot = await enquiryModalFormRoot(modal);
-  await humanHoverClick(formRoot.getByText(/^Follow Up$/i));
-  await pause("short");
+  await ensureFollowUpTabOpen(page, modal, log);
 
-  if (await isFollowUpTabReadyExceptEnquiryType(modal)) {
+  if (await isFollowUpTabReadyExceptEnquiryType(page, modal)) {
     await followUpEnquiryTypeThenSaveOnly(page, log, ctx);
     return;
   }
@@ -3373,19 +3662,7 @@ async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"
   await pause("normal");
 
   const remarkText = await resolveEnquiryFollowUpRemark(page, ctx);
-  if (await isFollowUpRemarksFilled(formRoot)) {
-    await log("info", `Follow Up Remarks already set (automation suffix) — skipping re-type.`);
-  } else {
-    const remarks = await resolveFollowUpRemarksInput(formRoot);
-    await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
-    await withModalInputBypass(modal, async () => {
-      await remarks.click();
-      await remarks.fill("");
-      await remarks.pressSequentially(remarkText, { delay: scaledRandomBetween(80, 140) });
-    });
-    await log("info", `Follow Up Remarks set to "${remarkText}" (Scheme Offered left empty).`);
-    await pause("normal");
-  }
+  await fillFollowUpRemarksField(page, modal, remarkText, log);
 
   const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
   if (/^phone$/i.test(followType.trim())) {
@@ -3451,8 +3728,8 @@ export type FollowUpSkipContext = Pick<
 
 async function readFollowUpSkipDropdownDisplay(modal: Locator, label: RegExp): Promise<string> {
   try {
-    const formRoot = await enquiryModalFormRoot(modal);
-    const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
+    const page = modal.page();
+    const fieldsRoot = await resolveFollowUpFieldsContainer(page, modal);
     const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
     const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
     const display = host.locator("span.k-input, .k-input-value, input[role='combobox'], input").first();
@@ -3472,13 +3749,11 @@ async function openFollowUpSkipKendoDropdownNearLabel(
   label: RegExp,
   log?: EnquiryTransferContext["log"],
 ): Promise<void> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
+  const page = modal.page();
+  const fieldsRoot = await resolveFollowUpFieldsContainer(page, modal);
   const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
   await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
   if (log) await log("info", `Opening ${String(label)} dropdown (Follow Up Skip).`);
-
-  const page = modal.page();
   const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
   const kInput = host.locator("span.k-input").first();
   const kSelect = host.locator("span.k-select").first();
@@ -3575,14 +3850,8 @@ async function selectFollowUpSkipPhoneDropdown(
 }
 
 async function isFollowUpSkipReadyForSave(modal: Locator): Promise<boolean> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  try {
-    const remarks = await resolveFollowUpRemarksInput(formRoot);
-    const t = (await remarks.inputValue().catch(() => "")).trim();
-    if (!isAutomationRemarkFilled(t)) return false;
-  } catch {
-    return false;
-  }
+  const page = modal.page();
+  if (!(await isFollowUpRemarksFilled(page, modal))) return false;
   if (!/^phone$/i.test((await readFollowUpSkipDropdownDisplay(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim())) {
     return false;
   }
@@ -3607,7 +3876,7 @@ async function waitForFollowUpSkipReadyForSave(
     await dismissTransientKendoPopups(page);
     await pollDelay(350);
   }
-  throw new Error(`Follow Up Skip not ready for Save (${await describeFollowUpReadiness(modal)}).`);
+  throw new Error(`Follow Up Skip not ready for Save (${await describeFollowUpReadiness(page, modal)}).`);
 }
 
 async function setNextFollowUpTimeForSkip(

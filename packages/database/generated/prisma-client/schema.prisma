@@ -1,0 +1,333 @@
+generator client {
+  provider = "prisma-client-js"
+  /**
+   * Monorepo: types always from this package, not a stale hoisted @prisma/client
+   */
+  output   = "../generated/prisma-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  DEALER_ADMIN
+  TEAM_LEADER
+  SALES_CONSULTANT
+}
+
+/**
+ * Team Leaders only — Digital runs enquiry transfer; Field does not.
+ */
+enum TeamType {
+  DIGITAL
+  FIELD
+}
+
+enum WorkflowRunStatus {
+  PENDING
+  RUNNING
+  PAUSED_OTP
+  PAUSED_USER
+  COMPLETED
+  FAILED
+  STOPPED
+}
+
+enum LeadCategory {
+  HOT
+  WARM
+  FAKE
+  NEED_CALL
+}
+
+enum VoiceProfileStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+enum AndroidDeviceStatus {
+  OFFLINE
+  ONLINE
+  BUSY
+}
+
+model Dealer {
+  id                  String                    @id @default(cuid())
+  name                String
+  isActive            Boolean                   @default(true)
+  maxTeamLeaders      Int                       @default(10)
+  maxSalesConsultants Int                       @default(50)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  users               User[]
+  inquiries           Inquiry[]
+  workflows           DealerWorkflow[]
+  runs                WorkflowRun[]
+  devices             AndroidDevice[]
+  voiceProfiles       VoiceProfile[]
+  automationSettings  DealerAutomationSettings?
+}
+
+/**
+ * Per-dealer scheduled automation toggles (e.g. daily Follow Up Skip).
+ */
+model DealerAutomationSettings {
+  id                       String    @id @default(cuid())
+  dealerId                 String    @unique
+  dealer                   Dealer    @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  followUpSkipEnabled      Boolean   @default(false)
+  /**
+   * Daily start time in IST, 24h "HH:mm" (e.g. "09:30").
+   */
+  followUpSkipStartTime    String?
+  /**
+   * Enquiry transfer default remark base (automation appends "...").
+   */
+  defaultEnquiryRemarkBase String    @default("Call Back")
+  /**
+   * [{ source, subSource?, remarkBase }] — per source/sub-source overrides.
+   */
+  enquiryRemarkRules       Json      @default("[]")
+  /**
+   * Follow-up skip remark bases; one picked at random per row (suffix appended).
+   */
+  followUpSkipRemarkBases  Json      @default("[]")
+  /**
+   * Optional Ollama model name for AI calling (Settings).
+   */
+  ollamaModel              String?
+  /**
+   * Scheduled daily enquiry transfer (IST HH:mm).
+   */
+  enquiryTransferEnabled   Boolean   @default(false)
+  enquiryTransferStartTime String?
+  /**
+   * Last scheduled follow-up skip run id (for Settings UI).
+   */
+  lastScheduledRunId       String?
+  lastScheduledRunAt       DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  dealerId    String?
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([dealerId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  readAt    DateTime?
+  payload   Json?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model WorkflowRunLog {
+  id      String   @id @default(cuid())
+  runId   String
+  level   String
+  message String
+  ts      DateTime @default(now())
+
+  @@index([runId, ts])
+}
+
+model User {
+  id              String         @id @default(cuid())
+  username        String         @unique
+  /**
+   * Shown in UI; defaults to username if empty
+   */
+  displayName     String?
+  /**
+   * Public URL or /uploads/avatars/{id}.ext served by API
+   */
+  avatarUrl       String?
+  /**
+   * Internal / legacy; login uses username only
+   */
+  email           String         @unique
+  passwordHash    String
+  role            UserRole
+  dealerId        String?
+  dealer          Dealer?        @relation(fields: [dealerId], references: [id], onDelete: SetNull)
+  reportsToUserId String?
+  reportsTo       User?          @relation("TeamHierarchy", fields: [reportsToUserId], references: [id], onDelete: SetNull)
+  directReports   User[]         @relation("TeamHierarchy")
+  /**
+   * Set when role is TEAM_LEADER. SC inherits via reportsTo.
+   */
+  teamType        TeamType?
+  isActive        Boolean        @default(true)
+  tokenVersion    Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  voiceProfiles   VoiceProfile[]
+  gdmsAccount     GdmsAccount?
+
+  @@index([dealerId, role])
+  @@index([reportsToUserId])
+}
+
+/**
+ * One GDMS login per user (each TL / SC has their own credentials).
+ */
+model GdmsAccount {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usernameCipher      String
+  passwordCipher      String
+  keyVersion          String    @default("v1")
+  usernameFingerprint String
+  lastVerifiedAt      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model DealerWorkflow {
+  id         String   @id @default(cuid())
+  dealerId   String
+  dealer     Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  name       String
+  version    String   @default("1")
+  definition Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([dealerId, name, version])
+  @@index([dealerId])
+}
+
+model Inquiry {
+  id            String       @id @default(cuid())
+  dealerId      String
+  dealer        Dealer       @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  externalKey   String?
+  phone         String
+  name          String?
+  status        String?
+  category      LeadCategory @default(WARM)
+  aiSummary     Json?
+  gdmsPayload   Json?
+  followUpNotes String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  logs          InquiryLog[]
+  aiCalls       AiCall[]
+
+  @@index([dealerId, phone])
+  @@index([dealerId, category])
+}
+
+model InquiryLog {
+  id        String   @id @default(cuid())
+  inquiryId String
+  inquiry   Inquiry  @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([inquiryId])
+}
+
+model WorkflowRun {
+  id                String            @id @default(cuid())
+  dealerId          String
+  dealer            Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  startedByUserId   String?
+  status            WorkflowRunStatus @default(PENDING)
+  currentStep       String?
+  runParams         Json?
+  browserSessionKey String?
+  errorMessage      String?
+  startedAt         DateTime          @default(now())
+  endedAt           DateTime?
+  aiCalls           AiCall[]
+
+  @@index([dealerId, startedAt])
+}
+
+model AiCall {
+  id              String         @id @default(cuid())
+  inquiryId       String
+  inquiry         Inquiry        @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  workflowRunId   String?
+  workflowRun     WorkflowRun?   @relation(fields: [workflowRunId], references: [id], onDelete: SetNull)
+  stateMachine    Json
+  androidDeviceId String?
+  androidDevice   AndroidDevice? @relation(fields: [androidDeviceId], references: [id], onDelete: SetNull)
+  voiceProfileId  String?
+  voiceProfile    VoiceProfile?  @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
+  outcome         String?
+  lastCallPhase   String?
+  callEndedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  logs            CallLog[]
+}
+
+model CallLog {
+  id         String   @id @default(cuid())
+  aiCallId   String
+  aiCall     AiCall   @relation(fields: [aiCallId], references: [id], onDelete: Cascade)
+  phase      String
+  transcript String?
+  metrics    Json?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([aiCallId])
+}
+
+model AndroidDevice {
+  id              String              @id @default(cuid())
+  dealerId        String
+  dealer          Dealer              @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  deviceId        String              @unique
+  pairingCodeHash String
+  socketTokenHash String              @default("")
+  status          AndroidDeviceStatus @default(OFFLINE)
+  capabilities    Json?
+  lastSeenAt      DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  aiCalls         AiCall[]
+
+  @@index([dealerId])
+}
+
+model VoiceProfile {
+  id           String             @id @default(cuid())
+  dealerId     String
+  dealer       Dealer             @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  artifactPath String
+  modelVersion String             @default("1")
+  status       VoiceProfileStatus @default(PENDING)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  aiCalls      AiCall[]
+
+  @@index([dealerId])
+}

@@ -217,7 +217,7 @@ export default function LiveSessionPage() {
           if (!stop) setSessionActive(Boolean(r.active || r.watchdog));
         })
         .catch(() => {
-          if (!stop) setSessionActive(false);
+          /* keep last value on transient poll failures */
         });
     };
     poll();
@@ -410,10 +410,15 @@ export default function LiveSessionPage() {
   const runAgeMs = runRow?.startedAt ? Date.now() - Date.parse(runRow.startedAt) : 0;
   const showRequeue =
     !!runId && runRow?.status === "PENDING" && pendingAgeMs > 20_000 && !requeuing;
+  const recentLogActivity =
+    logs.length > 0 &&
+    Date.now() - Date.parse(logs[logs.length - 1]!.ts) < 45_000;
   const runLostBrowser =
     !!runId &&
     runRow?.status === "RUNNING" &&
     !sessionActive &&
+    !recentLogActivity &&
+    !realtimeConnected &&
     runAgeMs > 15_000;
   const canRetryTransfer =
     !!runId &&
@@ -663,7 +668,7 @@ export default function LiveSessionPage() {
                   key={vncFrameKey}
                   title={`GDMS noVNC workspace ${previewWorkspace}`}
                   src={gdmsBrowserUrl}
-                  className="h-[min(75vh,900px)] w-full rounded border border-border bg-black"
+                  className="aspect-video w-full max-h-[80vh] rounded border border-border bg-black"
                   allow="clipboard-read; clipboard-write"
                 />
                 <div className="flex justify-end">

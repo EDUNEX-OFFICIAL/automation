@@ -5,6 +5,7 @@ import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms
 import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
 import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
+import { startGdmsBrowserWindowGeometryRefresh } from "./gdms-browser-window-geometry.js";
 import {
   browserProfileKeyForOperation,
   closeActiveSessionsForDealer,
@@ -88,6 +89,7 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
     display: vncDisplay,
   });
   startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+  startGdmsBrowserWindowGeometryRefresh(vncDisplay);
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (m) => void log("warn", m));
