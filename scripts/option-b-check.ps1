@@ -24,7 +24,7 @@ $allOk = $true
 
 Write-Host "`n=== Option B preflight ===" -ForegroundColor Cyan
 
-foreach ($port in @(6380, 54322)) {
+foreach ($port in @(6380, 32459)) {
     $t = Test-NetConnection -ComputerName localhost -Port $port -WarningAction SilentlyContinue
     if ($t.TcpTestSucceeded) {
         Write-Host "OK  localhost:$port (tunnel or local Redis/Postgres)" -ForegroundColor Green

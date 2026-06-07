@@ -69,6 +69,11 @@ export type InquiryLog = $Result.DefaultSelection<Prisma.$InquiryLogPayload>
  */
 export type WorkflowRun = $Result.DefaultSelection<Prisma.$WorkflowRunPayload>
 /**
+ * Model AutomationStatEvent
+ * * Per-enquiry automation success events for dashboard KPIs.
+ */
+export type AutomationStatEvent = $Result.DefaultSelection<Prisma.$AutomationStatEventPayload>
+/**
  * Model AiCall
  * 
  */
@@ -151,6 +156,15 @@ export const AndroidDeviceStatus: {
 
 export type AndroidDeviceStatus = (typeof AndroidDeviceStatus)[keyof typeof AndroidDeviceStatus]
 
+
+export const AutomationStatOperation: {
+  enquiry_transfer: 'enquiry_transfer',
+  follow_up_skip: 'follow_up_skip',
+  lost_inquiry: 'lost_inquiry'
+};
+
+export type AutomationStatOperation = (typeof AutomationStatOperation)[keyof typeof AutomationStatOperation]
+
 }
 
 export type UserRole = $Enums.UserRole
@@ -176,6 +190,10 @@ export const VoiceProfileStatus: typeof $Enums.VoiceProfileStatus
 export type AndroidDeviceStatus = $Enums.AndroidDeviceStatus
 
 export const AndroidDeviceStatus: typeof $Enums.AndroidDeviceStatus
+
+export type AutomationStatOperation = $Enums.AutomationStatOperation
+
+export const AutomationStatOperation: typeof $Enums.AutomationStatOperation
 
 /**
  * ##  Prisma Client ʲˢ
@@ -404,6 +422,16 @@ export class PrismaClient<
     * ```
     */
   get workflowRun(): Prisma.WorkflowRunDelegate<ExtArgs, ClientOptions>;
+
+  /**
+   * `prisma.automationStatEvent`: Exposes CRUD operations for the **AutomationStatEvent** model.
+    * Example usage:
+    * ```ts
+    * // Fetch zero or more AutomationStatEvents
+    * const automationStatEvents = await prisma.automationStatEvent.findMany()
+    * ```
+    */
+  get automationStatEvent(): Prisma.AutomationStatEventDelegate<ExtArgs, ClientOptions>;
 
   /**
    * `prisma.aiCall`: Exposes CRUD operations for the **AiCall** model.
@@ -896,6 +924,7 @@ export namespace Prisma {
     Inquiry: 'Inquiry',
     InquiryLog: 'InquiryLog',
     WorkflowRun: 'WorkflowRun',
+    AutomationStatEvent: 'AutomationStatEvent',
     AiCall: 'AiCall',
     CallLog: 'CallLog',
     AndroidDevice: 'AndroidDevice',
@@ -918,7 +947,7 @@ export namespace Prisma {
       omit: GlobalOmitOptions
     }
     meta: {
-      modelProps: "dealer" | "dealerAutomationSettings" | "auditEvent" | "notification" | "workflowRunLog" | "user" | "gdmsAccount" | "dealerWorkflow" | "inquiry" | "inquiryLog" | "workflowRun" | "aiCall" | "callLog" | "androidDevice" | "voiceProfile"
+      modelProps: "dealer" | "dealerAutomationSettings" | "auditEvent" | "notification" | "workflowRunLog" | "user" | "gdmsAccount" | "dealerWorkflow" | "inquiry" | "inquiryLog" | "workflowRun" | "automationStatEvent" | "aiCall" | "callLog" | "androidDevice" | "voiceProfile"
       txIsolationLevel: Prisma.TransactionIsolationLevel
     }
     model: {
@@ -1736,6 +1765,80 @@ export namespace Prisma {
           }
         }
       }
+      AutomationStatEvent: {
+        payload: Prisma.$AutomationStatEventPayload<ExtArgs>
+        fields: Prisma.AutomationStatEventFieldRefs
+        operations: {
+          findUnique: {
+            args: Prisma.AutomationStatEventFindUniqueArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload> | null
+          }
+          findUniqueOrThrow: {
+            args: Prisma.AutomationStatEventFindUniqueOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          findFirst: {
+            args: Prisma.AutomationStatEventFindFirstArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload> | null
+          }
+          findFirstOrThrow: {
+            args: Prisma.AutomationStatEventFindFirstOrThrowArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          findMany: {
+            args: Prisma.AutomationStatEventFindManyArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>[]
+          }
+          create: {
+            args: Prisma.AutomationStatEventCreateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          createMany: {
+            args: Prisma.AutomationStatEventCreateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          createManyAndReturn: {
+            args: Prisma.AutomationStatEventCreateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>[]
+          }
+          delete: {
+            args: Prisma.AutomationStatEventDeleteArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          update: {
+            args: Prisma.AutomationStatEventUpdateArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          deleteMany: {
+            args: Prisma.AutomationStatEventDeleteManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateMany: {
+            args: Prisma.AutomationStatEventUpdateManyArgs<ExtArgs>
+            result: BatchPayload
+          }
+          updateManyAndReturn: {
+            args: Prisma.AutomationStatEventUpdateManyAndReturnArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>[]
+          }
+          upsert: {
+            args: Prisma.AutomationStatEventUpsertArgs<ExtArgs>
+            result: $Utils.PayloadToResult<Prisma.$AutomationStatEventPayload>
+          }
+          aggregate: {
+            args: Prisma.AutomationStatEventAggregateArgs<ExtArgs>
+            result: $Utils.Optional<AggregateAutomationStatEvent>
+          }
+          groupBy: {
+            args: Prisma.AutomationStatEventGroupByArgs<ExtArgs>
+            result: $Utils.Optional<AutomationStatEventGroupByOutputType>[]
+          }
+          count: {
+            args: Prisma.AutomationStatEventCountArgs<ExtArgs>
+            result: $Utils.Optional<AutomationStatEventCountAggregateOutputType> | number
+          }
+        }
+      }
       AiCall: {
         payload: Prisma.$AiCallPayload<ExtArgs>
         fields: Prisma.AiCallFieldRefs
@@ -2139,6 +2242,7 @@ export namespace Prisma {
     inquiry?: InquiryOmit
     inquiryLog?: InquiryLogOmit
     workflowRun?: WorkflowRunOmit
+    automationStatEvent?: AutomationStatEventOmit
     aiCall?: AiCallOmit
     callLog?: CallLogOmit
     androidDevice?: AndroidDeviceOmit
@@ -2229,6 +2333,7 @@ export namespace Prisma {
     runs: number
     devices: number
     voiceProfiles: number
+    automationStatEvents: number
   }
 
   export type DealerCountOutputTypeSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
@@ -2238,6 +2343,7 @@ export namespace Prisma {
     runs?: boolean | DealerCountOutputTypeCountRunsArgs
     devices?: boolean | DealerCountOutputTypeCountDevicesArgs
     voiceProfiles?: boolean | DealerCountOutputTypeCountVoiceProfilesArgs
+    automationStatEvents?: boolean | DealerCountOutputTypeCountAutomationStatEventsArgs
   }
 
   // Custom InputTypes
@@ -2291,6 +2397,13 @@ export namespace Prisma {
    */
   export type DealerCountOutputTypeCountVoiceProfilesArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     where?: VoiceProfileWhereInput
+  }
+
+  /**
+   * DealerCountOutputType without action
+   */
+  export type DealerCountOutputTypeCountAutomationStatEventsArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: AutomationStatEventWhereInput
   }
 
 
@@ -2380,10 +2493,12 @@ export namespace Prisma {
 
   export type WorkflowRunCountOutputType = {
     aiCalls: number
+    automationStatEvents: number
   }
 
   export type WorkflowRunCountOutputTypeSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     aiCalls?: boolean | WorkflowRunCountOutputTypeCountAiCallsArgs
+    automationStatEvents?: boolean | WorkflowRunCountOutputTypeCountAutomationStatEventsArgs
   }
 
   // Custom InputTypes
@@ -2402,6 +2517,13 @@ export namespace Prisma {
    */
   export type WorkflowRunCountOutputTypeCountAiCallsArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     where?: AiCallWhereInput
+  }
+
+  /**
+   * WorkflowRunCountOutputType without action
+   */
+  export type WorkflowRunCountOutputTypeCountAutomationStatEventsArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: AutomationStatEventWhereInput
   }
 
 
@@ -2727,6 +2849,7 @@ export namespace Prisma {
     devices?: boolean | Dealer$devicesArgs<ExtArgs>
     voiceProfiles?: boolean | Dealer$voiceProfilesArgs<ExtArgs>
     automationSettings?: boolean | Dealer$automationSettingsArgs<ExtArgs>
+    automationStatEvents?: boolean | Dealer$automationStatEventsArgs<ExtArgs>
     _count?: boolean | DealerCountOutputTypeDefaultArgs<ExtArgs>
   }, ExtArgs["result"]["dealer"]>
 
@@ -2769,6 +2892,7 @@ export namespace Prisma {
     devices?: boolean | Dealer$devicesArgs<ExtArgs>
     voiceProfiles?: boolean | Dealer$voiceProfilesArgs<ExtArgs>
     automationSettings?: boolean | Dealer$automationSettingsArgs<ExtArgs>
+    automationStatEvents?: boolean | Dealer$automationStatEventsArgs<ExtArgs>
     _count?: boolean | DealerCountOutputTypeDefaultArgs<ExtArgs>
   }
   export type DealerIncludeCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {}
@@ -2784,6 +2908,7 @@ export namespace Prisma {
       devices: Prisma.$AndroidDevicePayload<ExtArgs>[]
       voiceProfiles: Prisma.$VoiceProfilePayload<ExtArgs>[]
       automationSettings: Prisma.$DealerAutomationSettingsPayload<ExtArgs> | null
+      automationStatEvents: Prisma.$AutomationStatEventPayload<ExtArgs>[]
     }
     scalars: $Extensions.GetPayloadResult<{
       id: string
@@ -3194,6 +3319,7 @@ export namespace Prisma {
     devices<T extends Dealer$devicesArgs<ExtArgs> = {}>(args?: Subset<T, Dealer$devicesArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AndroidDevicePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     voiceProfiles<T extends Dealer$voiceProfilesArgs<ExtArgs> = {}>(args?: Subset<T, Dealer$voiceProfilesArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$VoiceProfilePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     automationSettings<T extends Dealer$automationSettingsArgs<ExtArgs> = {}>(args?: Subset<T, Dealer$automationSettingsArgs<ExtArgs>>): Prisma__DealerAutomationSettingsClient<$Result.GetResult<Prisma.$DealerAutomationSettingsPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+    automationStatEvents<T extends Dealer$automationStatEventsArgs<ExtArgs> = {}>(args?: Subset<T, Dealer$automationStatEventsArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     /**
      * Attaches callbacks for the resolution and/or rejection of the Promise.
      * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -3781,6 +3907,30 @@ export namespace Prisma {
   }
 
   /**
+   * Dealer.automationStatEvents
+   */
+  export type Dealer$automationStatEventsArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    where?: AutomationStatEventWhereInput
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    cursor?: AutomationStatEventWhereUniqueInput
+    take?: number
+    skip?: number
+    distinct?: AutomationStatEventScalarFieldEnum | AutomationStatEventScalarFieldEnum[]
+  }
+
+  /**
    * Dealer without action
    */
   export type DealerDefaultArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
@@ -3818,6 +3968,8 @@ export namespace Prisma {
     ollamaModel: string | null
     enquiryTransferEnabled: boolean | null
     enquiryTransferStartTime: string | null
+    lostInquiryEnabled: boolean | null
+    lostInquiryStartTime: string | null
     lastScheduledRunId: string | null
     lastScheduledRunAt: Date | null
     createdAt: Date | null
@@ -3833,6 +3985,8 @@ export namespace Prisma {
     ollamaModel: string | null
     enquiryTransferEnabled: boolean | null
     enquiryTransferStartTime: string | null
+    lostInquiryEnabled: boolean | null
+    lostInquiryStartTime: string | null
     lastScheduledRunId: string | null
     lastScheduledRunAt: Date | null
     createdAt: Date | null
@@ -3850,6 +4004,8 @@ export namespace Prisma {
     ollamaModel: number
     enquiryTransferEnabled: number
     enquiryTransferStartTime: number
+    lostInquiryEnabled: number
+    lostInquiryStartTime: number
     lastScheduledRunId: number
     lastScheduledRunAt: number
     createdAt: number
@@ -3867,6 +4023,8 @@ export namespace Prisma {
     ollamaModel?: true
     enquiryTransferEnabled?: true
     enquiryTransferStartTime?: true
+    lostInquiryEnabled?: true
+    lostInquiryStartTime?: true
     lastScheduledRunId?: true
     lastScheduledRunAt?: true
     createdAt?: true
@@ -3882,6 +4040,8 @@ export namespace Prisma {
     ollamaModel?: true
     enquiryTransferEnabled?: true
     enquiryTransferStartTime?: true
+    lostInquiryEnabled?: true
+    lostInquiryStartTime?: true
     lastScheduledRunId?: true
     lastScheduledRunAt?: true
     createdAt?: true
@@ -3899,6 +4059,8 @@ export namespace Prisma {
     ollamaModel?: true
     enquiryTransferEnabled?: true
     enquiryTransferStartTime?: true
+    lostInquiryEnabled?: true
+    lostInquiryStartTime?: true
     lastScheduledRunId?: true
     lastScheduledRunAt?: true
     createdAt?: true
@@ -3989,6 +4151,8 @@ export namespace Prisma {
     ollamaModel: string | null
     enquiryTransferEnabled: boolean
     enquiryTransferStartTime: string | null
+    lostInquiryEnabled: boolean
+    lostInquiryStartTime: string | null
     lastScheduledRunId: string | null
     lastScheduledRunAt: Date | null
     createdAt: Date
@@ -4023,6 +4187,8 @@ export namespace Prisma {
     ollamaModel?: boolean
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: boolean
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: boolean
     lastScheduledRunId?: boolean
     lastScheduledRunAt?: boolean
     createdAt?: boolean
@@ -4041,6 +4207,8 @@ export namespace Prisma {
     ollamaModel?: boolean
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: boolean
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: boolean
     lastScheduledRunId?: boolean
     lastScheduledRunAt?: boolean
     createdAt?: boolean
@@ -4059,6 +4227,8 @@ export namespace Prisma {
     ollamaModel?: boolean
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: boolean
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: boolean
     lastScheduledRunId?: boolean
     lastScheduledRunAt?: boolean
     createdAt?: boolean
@@ -4077,13 +4247,15 @@ export namespace Prisma {
     ollamaModel?: boolean
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: boolean
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: boolean
     lastScheduledRunId?: boolean
     lastScheduledRunAt?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type DealerAutomationSettingsOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "dealerId" | "followUpSkipEnabled" | "followUpSkipStartTime" | "defaultEnquiryRemarkBase" | "enquiryRemarkRules" | "followUpSkipRemarkBases" | "ollamaModel" | "enquiryTransferEnabled" | "enquiryTransferStartTime" | "lastScheduledRunId" | "lastScheduledRunAt" | "createdAt" | "updatedAt", ExtArgs["result"]["dealerAutomationSettings"]>
+  export type DealerAutomationSettingsOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "dealerId" | "followUpSkipEnabled" | "followUpSkipStartTime" | "defaultEnquiryRemarkBase" | "enquiryRemarkRules" | "followUpSkipRemarkBases" | "ollamaModel" | "enquiryTransferEnabled" | "enquiryTransferStartTime" | "lostInquiryEnabled" | "lostInquiryStartTime" | "lastScheduledRunId" | "lastScheduledRunAt" | "createdAt" | "updatedAt", ExtArgs["result"]["dealerAutomationSettings"]>
   export type DealerAutomationSettingsInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     dealer?: boolean | DealerDefaultArgs<ExtArgs>
   }
@@ -4128,6 +4300,11 @@ export namespace Prisma {
        */
       enquiryTransferEnabled: boolean
       enquiryTransferStartTime: string | null
+      /**
+       * * Weekly Lost Inquiry on Saturdays (IST HH:mm).
+       */
+      lostInquiryEnabled: boolean
+      lostInquiryStartTime: string | null
       /**
        * * Last scheduled follow-up skip run id (for Settings UI).
        */
@@ -4569,6 +4746,8 @@ export namespace Prisma {
     readonly ollamaModel: FieldRef<"DealerAutomationSettings", 'String'>
     readonly enquiryTransferEnabled: FieldRef<"DealerAutomationSettings", 'Boolean'>
     readonly enquiryTransferStartTime: FieldRef<"DealerAutomationSettings", 'String'>
+    readonly lostInquiryEnabled: FieldRef<"DealerAutomationSettings", 'Boolean'>
+    readonly lostInquiryStartTime: FieldRef<"DealerAutomationSettings", 'String'>
     readonly lastScheduledRunId: FieldRef<"DealerAutomationSettings", 'String'>
     readonly lastScheduledRunAt: FieldRef<"DealerAutomationSettings", 'DateTime'>
     readonly createdAt: FieldRef<"DealerAutomationSettings", 'DateTime'>
@@ -14035,6 +14214,7 @@ export namespace Prisma {
     endedAt?: boolean
     dealer?: boolean | DealerDefaultArgs<ExtArgs>
     aiCalls?: boolean | WorkflowRun$aiCallsArgs<ExtArgs>
+    automationStatEvents?: boolean | WorkflowRun$automationStatEventsArgs<ExtArgs>
     _count?: boolean | WorkflowRunCountOutputTypeDefaultArgs<ExtArgs>
   }, ExtArgs["result"]["workflowRun"]>
 
@@ -14083,6 +14263,7 @@ export namespace Prisma {
   export type WorkflowRunInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     dealer?: boolean | DealerDefaultArgs<ExtArgs>
     aiCalls?: boolean | WorkflowRun$aiCallsArgs<ExtArgs>
+    automationStatEvents?: boolean | WorkflowRun$automationStatEventsArgs<ExtArgs>
     _count?: boolean | WorkflowRunCountOutputTypeDefaultArgs<ExtArgs>
   }
   export type WorkflowRunIncludeCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
@@ -14097,6 +14278,7 @@ export namespace Prisma {
     objects: {
       dealer: Prisma.$DealerPayload<ExtArgs>
       aiCalls: Prisma.$AiCallPayload<ExtArgs>[]
+      automationStatEvents: Prisma.$AutomationStatEventPayload<ExtArgs>[]
     }
     scalars: $Extensions.GetPayloadResult<{
       id: string
@@ -14505,6 +14687,7 @@ export namespace Prisma {
     readonly [Symbol.toStringTag]: "PrismaPromise"
     dealer<T extends DealerDefaultArgs<ExtArgs> = {}>(args?: Subset<T, DealerDefaultArgs<ExtArgs>>): Prisma__DealerClient<$Result.GetResult<Prisma.$DealerPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
     aiCalls<T extends WorkflowRun$aiCallsArgs<ExtArgs> = {}>(args?: Subset<T, WorkflowRun$aiCallsArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AiCallPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+    automationStatEvents<T extends WorkflowRun$automationStatEventsArgs<ExtArgs> = {}>(args?: Subset<T, WorkflowRun$automationStatEventsArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
     /**
      * Attaches callbacks for the resolution and/or rejection of the Promise.
      * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -14964,6 +15147,30 @@ export namespace Prisma {
   }
 
   /**
+   * WorkflowRun.automationStatEvents
+   */
+  export type WorkflowRun$automationStatEventsArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    where?: AutomationStatEventWhereInput
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    cursor?: AutomationStatEventWhereUniqueInput
+    take?: number
+    skip?: number
+    distinct?: AutomationStatEventScalarFieldEnum | AutomationStatEventScalarFieldEnum[]
+  }
+
+  /**
    * WorkflowRun without action
    */
   export type WorkflowRunDefaultArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
@@ -14979,6 +15186,1124 @@ export namespace Prisma {
      * Choose, which related nodes to fetch as well
      */
     include?: WorkflowRunInclude<ExtArgs> | null
+  }
+
+
+  /**
+   * Model AutomationStatEvent
+   */
+
+  export type AggregateAutomationStatEvent = {
+    _count: AutomationStatEventCountAggregateOutputType | null
+    _min: AutomationStatEventMinAggregateOutputType | null
+    _max: AutomationStatEventMaxAggregateOutputType | null
+  }
+
+  export type AutomationStatEventMinAggregateOutputType = {
+    id: string | null
+    dealerId: string | null
+    workflowRunId: string | null
+    operation: $Enums.AutomationStatOperation | null
+    startedByUserId: string | null
+    teamLeaderUserId: string | null
+    salesConsultantUserId: string | null
+    salesConsultantLabel: string | null
+    occurredAt: Date | null
+  }
+
+  export type AutomationStatEventMaxAggregateOutputType = {
+    id: string | null
+    dealerId: string | null
+    workflowRunId: string | null
+    operation: $Enums.AutomationStatOperation | null
+    startedByUserId: string | null
+    teamLeaderUserId: string | null
+    salesConsultantUserId: string | null
+    salesConsultantLabel: string | null
+    occurredAt: Date | null
+  }
+
+  export type AutomationStatEventCountAggregateOutputType = {
+    id: number
+    dealerId: number
+    workflowRunId: number
+    operation: number
+    startedByUserId: number
+    teamLeaderUserId: number
+    salesConsultantUserId: number
+    salesConsultantLabel: number
+    occurredAt: number
+    _all: number
+  }
+
+
+  export type AutomationStatEventMinAggregateInputType = {
+    id?: true
+    dealerId?: true
+    workflowRunId?: true
+    operation?: true
+    startedByUserId?: true
+    teamLeaderUserId?: true
+    salesConsultantUserId?: true
+    salesConsultantLabel?: true
+    occurredAt?: true
+  }
+
+  export type AutomationStatEventMaxAggregateInputType = {
+    id?: true
+    dealerId?: true
+    workflowRunId?: true
+    operation?: true
+    startedByUserId?: true
+    teamLeaderUserId?: true
+    salesConsultantUserId?: true
+    salesConsultantLabel?: true
+    occurredAt?: true
+  }
+
+  export type AutomationStatEventCountAggregateInputType = {
+    id?: true
+    dealerId?: true
+    workflowRunId?: true
+    operation?: true
+    startedByUserId?: true
+    teamLeaderUserId?: true
+    salesConsultantUserId?: true
+    salesConsultantLabel?: true
+    occurredAt?: true
+    _all?: true
+  }
+
+  export type AutomationStatEventAggregateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which AutomationStatEvent to aggregate.
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of AutomationStatEvents to fetch.
+     */
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the start position
+     */
+    cursor?: AutomationStatEventWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` AutomationStatEvents from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` AutomationStatEvents.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Count returned AutomationStatEvents
+    **/
+    _count?: true | AutomationStatEventCountAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the minimum value
+    **/
+    _min?: AutomationStatEventMinAggregateInputType
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/aggregations Aggregation Docs}
+     * 
+     * Select which fields to find the maximum value
+    **/
+    _max?: AutomationStatEventMaxAggregateInputType
+  }
+
+  export type GetAutomationStatEventAggregateType<T extends AutomationStatEventAggregateArgs> = {
+        [P in keyof T & keyof AggregateAutomationStatEvent]: P extends '_count' | 'count'
+      ? T[P] extends true
+        ? number
+        : GetScalarType<T[P], AggregateAutomationStatEvent[P]>
+      : GetScalarType<T[P], AggregateAutomationStatEvent[P]>
+  }
+
+
+
+
+  export type AutomationStatEventGroupByArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    where?: AutomationStatEventWhereInput
+    orderBy?: AutomationStatEventOrderByWithAggregationInput | AutomationStatEventOrderByWithAggregationInput[]
+    by: AutomationStatEventScalarFieldEnum[] | AutomationStatEventScalarFieldEnum
+    having?: AutomationStatEventScalarWhereWithAggregatesInput
+    take?: number
+    skip?: number
+    _count?: AutomationStatEventCountAggregateInputType | true
+    _min?: AutomationStatEventMinAggregateInputType
+    _max?: AutomationStatEventMaxAggregateInputType
+  }
+
+  export type AutomationStatEventGroupByOutputType = {
+    id: string
+    dealerId: string
+    workflowRunId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId: string | null
+    salesConsultantUserId: string | null
+    salesConsultantLabel: string
+    occurredAt: Date
+    _count: AutomationStatEventCountAggregateOutputType | null
+    _min: AutomationStatEventMinAggregateOutputType | null
+    _max: AutomationStatEventMaxAggregateOutputType | null
+  }
+
+  type GetAutomationStatEventGroupByPayload<T extends AutomationStatEventGroupByArgs> = Prisma.PrismaPromise<
+    Array<
+      PickEnumerable<AutomationStatEventGroupByOutputType, T['by']> &
+        {
+          [P in ((keyof T) & (keyof AutomationStatEventGroupByOutputType))]: P extends '_count'
+            ? T[P] extends boolean
+              ? number
+              : GetScalarType<T[P], AutomationStatEventGroupByOutputType[P]>
+            : GetScalarType<T[P], AutomationStatEventGroupByOutputType[P]>
+        }
+      >
+    >
+
+
+  export type AutomationStatEventSelect<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    dealerId?: boolean
+    workflowRunId?: boolean
+    operation?: boolean
+    startedByUserId?: boolean
+    teamLeaderUserId?: boolean
+    salesConsultantUserId?: boolean
+    salesConsultantLabel?: boolean
+    occurredAt?: boolean
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["automationStatEvent"]>
+
+  export type AutomationStatEventSelectCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    dealerId?: boolean
+    workflowRunId?: boolean
+    operation?: boolean
+    startedByUserId?: boolean
+    teamLeaderUserId?: boolean
+    salesConsultantUserId?: boolean
+    salesConsultantLabel?: boolean
+    occurredAt?: boolean
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["automationStatEvent"]>
+
+  export type AutomationStatEventSelectUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetSelect<{
+    id?: boolean
+    dealerId?: boolean
+    workflowRunId?: boolean
+    operation?: boolean
+    startedByUserId?: boolean
+    teamLeaderUserId?: boolean
+    salesConsultantUserId?: boolean
+    salesConsultantLabel?: boolean
+    occurredAt?: boolean
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }, ExtArgs["result"]["automationStatEvent"]>
+
+  export type AutomationStatEventSelectScalar = {
+    id?: boolean
+    dealerId?: boolean
+    workflowRunId?: boolean
+    operation?: boolean
+    startedByUserId?: boolean
+    teamLeaderUserId?: boolean
+    salesConsultantUserId?: boolean
+    salesConsultantLabel?: boolean
+    occurredAt?: boolean
+  }
+
+  export type AutomationStatEventOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "dealerId" | "workflowRunId" | "operation" | "startedByUserId" | "teamLeaderUserId" | "salesConsultantUserId" | "salesConsultantLabel" | "occurredAt", ExtArgs["result"]["automationStatEvent"]>
+  export type AutomationStatEventInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }
+  export type AutomationStatEventIncludeCreateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }
+  export type AutomationStatEventIncludeUpdateManyAndReturn<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    dealer?: boolean | DealerDefaultArgs<ExtArgs>
+    workflowRun?: boolean | WorkflowRunDefaultArgs<ExtArgs>
+  }
+
+  export type $AutomationStatEventPayload<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    name: "AutomationStatEvent"
+    objects: {
+      dealer: Prisma.$DealerPayload<ExtArgs>
+      workflowRun: Prisma.$WorkflowRunPayload<ExtArgs>
+    }
+    scalars: $Extensions.GetPayloadResult<{
+      id: string
+      dealerId: string
+      workflowRunId: string
+      operation: $Enums.AutomationStatOperation
+      startedByUserId: string
+      teamLeaderUserId: string | null
+      salesConsultantUserId: string | null
+      salesConsultantLabel: string
+      occurredAt: Date
+    }, ExtArgs["result"]["automationStatEvent"]>
+    composites: {}
+  }
+
+  type AutomationStatEventGetPayload<S extends boolean | null | undefined | AutomationStatEventDefaultArgs> = $Result.GetResult<Prisma.$AutomationStatEventPayload, S>
+
+  type AutomationStatEventCountArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> =
+    Omit<AutomationStatEventFindManyArgs, 'select' | 'include' | 'distinct' | 'omit'> & {
+      select?: AutomationStatEventCountAggregateInputType | true
+    }
+
+  export interface AutomationStatEventDelegate<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> {
+    [K: symbol]: { types: Prisma.TypeMap<ExtArgs>['model']['AutomationStatEvent'], meta: { name: 'AutomationStatEvent' } }
+    /**
+     * Find zero or one AutomationStatEvent that matches the filter.
+     * @param {AutomationStatEventFindUniqueArgs} args - Arguments to find a AutomationStatEvent
+     * @example
+     * // Get one AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.findUnique({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUnique<T extends AutomationStatEventFindUniqueArgs>(args: SelectSubset<T, AutomationStatEventFindUniqueArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findUnique", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find one AutomationStatEvent that matches the filter or throw an error with `error.code='P2025'`
+     * if no matches were found.
+     * @param {AutomationStatEventFindUniqueOrThrowArgs} args - Arguments to find a AutomationStatEvent
+     * @example
+     * // Get one AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.findUniqueOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findUniqueOrThrow<T extends AutomationStatEventFindUniqueOrThrowArgs>(args: SelectSubset<T, AutomationStatEventFindUniqueOrThrowArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first AutomationStatEvent that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventFindFirstArgs} args - Arguments to find a AutomationStatEvent
+     * @example
+     * // Get one AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.findFirst({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirst<T extends AutomationStatEventFindFirstArgs>(args?: SelectSubset<T, AutomationStatEventFindFirstArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findFirst", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find the first AutomationStatEvent that matches the filter or
+     * throw `PrismaKnownClientError` with `P2025` code if no matches were found.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventFindFirstOrThrowArgs} args - Arguments to find a AutomationStatEvent
+     * @example
+     * // Get one AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.findFirstOrThrow({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     */
+    findFirstOrThrow<T extends AutomationStatEventFindFirstOrThrowArgs>(args?: SelectSubset<T, AutomationStatEventFindFirstOrThrowArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findFirstOrThrow", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Find zero or more AutomationStatEvents that matches the filter.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventFindManyArgs} args - Arguments to filter and select certain fields only.
+     * @example
+     * // Get all AutomationStatEvents
+     * const automationStatEvents = await prisma.automationStatEvent.findMany()
+     * 
+     * // Get first 10 AutomationStatEvents
+     * const automationStatEvents = await prisma.automationStatEvent.findMany({ take: 10 })
+     * 
+     * // Only select the `id`
+     * const automationStatEventWithIdOnly = await prisma.automationStatEvent.findMany({ select: { id: true } })
+     * 
+     */
+    findMany<T extends AutomationStatEventFindManyArgs>(args?: SelectSubset<T, AutomationStatEventFindManyArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "findMany", GlobalOmitOptions>>
+
+    /**
+     * Create a AutomationStatEvent.
+     * @param {AutomationStatEventCreateArgs} args - Arguments to create a AutomationStatEvent.
+     * @example
+     * // Create one AutomationStatEvent
+     * const AutomationStatEvent = await prisma.automationStatEvent.create({
+     *   data: {
+     *     // ... data to create a AutomationStatEvent
+     *   }
+     * })
+     * 
+     */
+    create<T extends AutomationStatEventCreateArgs>(args: SelectSubset<T, AutomationStatEventCreateArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "create", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Create many AutomationStatEvents.
+     * @param {AutomationStatEventCreateManyArgs} args - Arguments to create many AutomationStatEvents.
+     * @example
+     * // Create many AutomationStatEvents
+     * const automationStatEvent = await prisma.automationStatEvent.createMany({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     *     
+     */
+    createMany<T extends AutomationStatEventCreateManyArgs>(args?: SelectSubset<T, AutomationStatEventCreateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Create many AutomationStatEvents and returns the data saved in the database.
+     * @param {AutomationStatEventCreateManyAndReturnArgs} args - Arguments to create many AutomationStatEvents.
+     * @example
+     * // Create many AutomationStatEvents
+     * const automationStatEvent = await prisma.automationStatEvent.createManyAndReturn({
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Create many AutomationStatEvents and only return the `id`
+     * const automationStatEventWithIdOnly = await prisma.automationStatEvent.createManyAndReturn({
+     *   select: { id: true },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    createManyAndReturn<T extends AutomationStatEventCreateManyAndReturnArgs>(args?: SelectSubset<T, AutomationStatEventCreateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "createManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Delete a AutomationStatEvent.
+     * @param {AutomationStatEventDeleteArgs} args - Arguments to delete one AutomationStatEvent.
+     * @example
+     * // Delete one AutomationStatEvent
+     * const AutomationStatEvent = await prisma.automationStatEvent.delete({
+     *   where: {
+     *     // ... filter to delete one AutomationStatEvent
+     *   }
+     * })
+     * 
+     */
+    delete<T extends AutomationStatEventDeleteArgs>(args: SelectSubset<T, AutomationStatEventDeleteArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "delete", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Update one AutomationStatEvent.
+     * @param {AutomationStatEventUpdateArgs} args - Arguments to update one AutomationStatEvent.
+     * @example
+     * // Update one AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.update({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    update<T extends AutomationStatEventUpdateArgs>(args: SelectSubset<T, AutomationStatEventUpdateArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "update", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+    /**
+     * Delete zero or more AutomationStatEvents.
+     * @param {AutomationStatEventDeleteManyArgs} args - Arguments to filter AutomationStatEvents to delete.
+     * @example
+     * // Delete a few AutomationStatEvents
+     * const { count } = await prisma.automationStatEvent.deleteMany({
+     *   where: {
+     *     // ... provide filter here
+     *   }
+     * })
+     * 
+     */
+    deleteMany<T extends AutomationStatEventDeleteManyArgs>(args?: SelectSubset<T, AutomationStatEventDeleteManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more AutomationStatEvents.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventUpdateManyArgs} args - Arguments to update one or more rows.
+     * @example
+     * // Update many AutomationStatEvents
+     * const automationStatEvent = await prisma.automationStatEvent.updateMany({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: {
+     *     // ... provide data here
+     *   }
+     * })
+     * 
+     */
+    updateMany<T extends AutomationStatEventUpdateManyArgs>(args: SelectSubset<T, AutomationStatEventUpdateManyArgs<ExtArgs>>): Prisma.PrismaPromise<BatchPayload>
+
+    /**
+     * Update zero or more AutomationStatEvents and returns the data updated in the database.
+     * @param {AutomationStatEventUpdateManyAndReturnArgs} args - Arguments to update many AutomationStatEvents.
+     * @example
+     * // Update many AutomationStatEvents
+     * const automationStatEvent = await prisma.automationStatEvent.updateManyAndReturn({
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * 
+     * // Update zero or more AutomationStatEvents and only return the `id`
+     * const automationStatEventWithIdOnly = await prisma.automationStatEvent.updateManyAndReturn({
+     *   select: { id: true },
+     *   where: {
+     *     // ... provide filter here
+     *   },
+     *   data: [
+     *     // ... provide data here
+     *   ]
+     * })
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * 
+     */
+    updateManyAndReturn<T extends AutomationStatEventUpdateManyAndReturnArgs>(args: SelectSubset<T, AutomationStatEventUpdateManyAndReturnArgs<ExtArgs>>): Prisma.PrismaPromise<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "updateManyAndReturn", GlobalOmitOptions>>
+
+    /**
+     * Create or update one AutomationStatEvent.
+     * @param {AutomationStatEventUpsertArgs} args - Arguments to update or create a AutomationStatEvent.
+     * @example
+     * // Update or create a AutomationStatEvent
+     * const automationStatEvent = await prisma.automationStatEvent.upsert({
+     *   create: {
+     *     // ... data to create a AutomationStatEvent
+     *   },
+     *   update: {
+     *     // ... in case it already exists, update
+     *   },
+     *   where: {
+     *     // ... the filter for the AutomationStatEvent we want to update
+     *   }
+     * })
+     */
+    upsert<T extends AutomationStatEventUpsertArgs>(args: SelectSubset<T, AutomationStatEventUpsertArgs<ExtArgs>>): Prisma__AutomationStatEventClient<$Result.GetResult<Prisma.$AutomationStatEventPayload<ExtArgs>, T, "upsert", GlobalOmitOptions>, never, ExtArgs, GlobalOmitOptions>
+
+
+    /**
+     * Count the number of AutomationStatEvents.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventCountArgs} args - Arguments to filter AutomationStatEvents to count.
+     * @example
+     * // Count the number of AutomationStatEvents
+     * const count = await prisma.automationStatEvent.count({
+     *   where: {
+     *     // ... the filter for the AutomationStatEvents we want to count
+     *   }
+     * })
+    **/
+    count<T extends AutomationStatEventCountArgs>(
+      args?: Subset<T, AutomationStatEventCountArgs>,
+    ): Prisma.PrismaPromise<
+      T extends $Utils.Record<'select', any>
+        ? T['select'] extends true
+          ? number
+          : GetScalarType<T['select'], AutomationStatEventCountAggregateOutputType>
+        : number
+    >
+
+    /**
+     * Allows you to perform aggregations operations on a AutomationStatEvent.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventAggregateArgs} args - Select which aggregations you would like to apply and on what fields.
+     * @example
+     * // Ordered by age ascending
+     * // Where email contains prisma.io
+     * // Limited to the 10 users
+     * const aggregations = await prisma.user.aggregate({
+     *   _avg: {
+     *     age: true,
+     *   },
+     *   where: {
+     *     email: {
+     *       contains: "prisma.io",
+     *     },
+     *   },
+     *   orderBy: {
+     *     age: "asc",
+     *   },
+     *   take: 10,
+     * })
+    **/
+    aggregate<T extends AutomationStatEventAggregateArgs>(args: Subset<T, AutomationStatEventAggregateArgs>): Prisma.PrismaPromise<GetAutomationStatEventAggregateType<T>>
+
+    /**
+     * Group by AutomationStatEvent.
+     * Note, that providing `undefined` is treated as the value not being there.
+     * Read more here: https://pris.ly/d/null-undefined
+     * @param {AutomationStatEventGroupByArgs} args - Group by arguments.
+     * @example
+     * // Group by city, order by createdAt, get count
+     * const result = await prisma.user.groupBy({
+     *   by: ['city', 'createdAt'],
+     *   orderBy: {
+     *     createdAt: true
+     *   },
+     *   _count: {
+     *     _all: true
+     *   },
+     * })
+     * 
+    **/
+    groupBy<
+      T extends AutomationStatEventGroupByArgs,
+      HasSelectOrTake extends Or<
+        Extends<'skip', Keys<T>>,
+        Extends<'take', Keys<T>>
+      >,
+      OrderByArg extends True extends HasSelectOrTake
+        ? { orderBy: AutomationStatEventGroupByArgs['orderBy'] }
+        : { orderBy?: AutomationStatEventGroupByArgs['orderBy'] },
+      OrderFields extends ExcludeUnderscoreKeys<Keys<MaybeTupleToUnion<T['orderBy']>>>,
+      ByFields extends MaybeTupleToUnion<T['by']>,
+      ByValid extends Has<ByFields, OrderFields>,
+      HavingFields extends GetHavingFields<T['having']>,
+      HavingValid extends Has<ByFields, HavingFields>,
+      ByEmpty extends T['by'] extends never[] ? True : False,
+      InputErrors extends ByEmpty extends True
+      ? `Error: "by" must not be empty.`
+      : HavingValid extends False
+      ? {
+          [P in HavingFields]: P extends ByFields
+            ? never
+            : P extends string
+            ? `Error: Field "${P}" used in "having" needs to be provided in "by".`
+            : [
+                Error,
+                'Field ',
+                P,
+                ` in "having" needs to be provided in "by"`,
+              ]
+        }[HavingFields]
+      : 'take' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "take", you also need to provide "orderBy"'
+      : 'skip' extends Keys<T>
+      ? 'orderBy' extends Keys<T>
+        ? ByValid extends True
+          ? {}
+          : {
+              [P in OrderFields]: P extends ByFields
+                ? never
+                : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+            }[OrderFields]
+        : 'Error: If you provide "skip", you also need to provide "orderBy"'
+      : ByValid extends True
+      ? {}
+      : {
+          [P in OrderFields]: P extends ByFields
+            ? never
+            : `Error: Field "${P}" in "orderBy" needs to be provided in "by"`
+        }[OrderFields]
+    >(args: SubsetIntersection<T, AutomationStatEventGroupByArgs, OrderByArg> & InputErrors): {} extends InputErrors ? GetAutomationStatEventGroupByPayload<T> : Prisma.PrismaPromise<InputErrors>
+  /**
+   * Fields of the AutomationStatEvent model
+   */
+  readonly fields: AutomationStatEventFieldRefs;
+  }
+
+  /**
+   * The delegate class that acts as a "Promise-like" for AutomationStatEvent.
+   * Why is this prefixed with `Prisma__`?
+   * Because we want to prevent naming conflicts as mentioned in
+   * https://github.com/prisma/prisma-client-js/issues/707
+   */
+  export interface Prisma__AutomationStatEventClient<T, Null = never, ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
+    readonly [Symbol.toStringTag]: "PrismaPromise"
+    dealer<T extends DealerDefaultArgs<ExtArgs> = {}>(args?: Subset<T, DealerDefaultArgs<ExtArgs>>): Prisma__DealerClient<$Result.GetResult<Prisma.$DealerPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
+    workflowRun<T extends WorkflowRunDefaultArgs<ExtArgs> = {}>(args?: Subset<T, WorkflowRunDefaultArgs<ExtArgs>>): Prisma__WorkflowRunClient<$Result.GetResult<Prisma.$WorkflowRunPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
+    /**
+     * Attaches callbacks for the resolution and/or rejection of the Promise.
+     * @param onfulfilled The callback to execute when the Promise is resolved.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of which ever callback is executed.
+     */
+    then<TResult1 = T, TResult2 = never>(onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): $Utils.JsPromise<TResult1 | TResult2>
+    /**
+     * Attaches a callback for only the rejection of the Promise.
+     * @param onrejected The callback to execute when the Promise is rejected.
+     * @returns A Promise for the completion of the callback.
+     */
+    catch<TResult = never>(onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): $Utils.JsPromise<T | TResult>
+    /**
+     * Attaches a callback that is invoked when the Promise is settled (fulfilled or rejected). The
+     * resolved value cannot be modified from the callback.
+     * @param onfinally The callback to execute when the Promise is settled (fulfilled or rejected).
+     * @returns A Promise for the completion of the callback.
+     */
+    finally(onfinally?: (() => void) | undefined | null): $Utils.JsPromise<T>
+  }
+
+
+
+
+  /**
+   * Fields of the AutomationStatEvent model
+   */
+  interface AutomationStatEventFieldRefs {
+    readonly id: FieldRef<"AutomationStatEvent", 'String'>
+    readonly dealerId: FieldRef<"AutomationStatEvent", 'String'>
+    readonly workflowRunId: FieldRef<"AutomationStatEvent", 'String'>
+    readonly operation: FieldRef<"AutomationStatEvent", 'AutomationStatOperation'>
+    readonly startedByUserId: FieldRef<"AutomationStatEvent", 'String'>
+    readonly teamLeaderUserId: FieldRef<"AutomationStatEvent", 'String'>
+    readonly salesConsultantUserId: FieldRef<"AutomationStatEvent", 'String'>
+    readonly salesConsultantLabel: FieldRef<"AutomationStatEvent", 'String'>
+    readonly occurredAt: FieldRef<"AutomationStatEvent", 'DateTime'>
+  }
+    
+
+  // Custom InputTypes
+  /**
+   * AutomationStatEvent findUnique
+   */
+  export type AutomationStatEventFindUniqueArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter, which AutomationStatEvent to fetch.
+     */
+    where: AutomationStatEventWhereUniqueInput
+  }
+
+  /**
+   * AutomationStatEvent findUniqueOrThrow
+   */
+  export type AutomationStatEventFindUniqueOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter, which AutomationStatEvent to fetch.
+     */
+    where: AutomationStatEventWhereUniqueInput
+  }
+
+  /**
+   * AutomationStatEvent findFirst
+   */
+  export type AutomationStatEventFindFirstArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter, which AutomationStatEvent to fetch.
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of AutomationStatEvents to fetch.
+     */
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for AutomationStatEvents.
+     */
+    cursor?: AutomationStatEventWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` AutomationStatEvents from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` AutomationStatEvents.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of AutomationStatEvents.
+     */
+    distinct?: AutomationStatEventScalarFieldEnum | AutomationStatEventScalarFieldEnum[]
+  }
+
+  /**
+   * AutomationStatEvent findFirstOrThrow
+   */
+  export type AutomationStatEventFindFirstOrThrowArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter, which AutomationStatEvent to fetch.
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of AutomationStatEvents to fetch.
+     */
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for searching for AutomationStatEvents.
+     */
+    cursor?: AutomationStatEventWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` AutomationStatEvents from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` AutomationStatEvents.
+     */
+    skip?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+     * 
+     * Filter by unique combinations of AutomationStatEvents.
+     */
+    distinct?: AutomationStatEventScalarFieldEnum | AutomationStatEventScalarFieldEnum[]
+  }
+
+  /**
+   * AutomationStatEvent findMany
+   */
+  export type AutomationStatEventFindManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter, which AutomationStatEvents to fetch.
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/sorting Sorting Docs}
+     * 
+     * Determine the order of AutomationStatEvents to fetch.
+     */
+    orderBy?: AutomationStatEventOrderByWithRelationInput | AutomationStatEventOrderByWithRelationInput[]
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination#cursor-based-pagination Cursor Docs}
+     * 
+     * Sets the position for listing AutomationStatEvents.
+     */
+    cursor?: AutomationStatEventWhereUniqueInput
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Take `±n` AutomationStatEvents from the position of the cursor.
+     */
+    take?: number
+    /**
+     * {@link https://www.prisma.io/docs/concepts/components/prisma-client/pagination Pagination Docs}
+     * 
+     * Skip the first `n` AutomationStatEvents.
+     */
+    skip?: number
+    distinct?: AutomationStatEventScalarFieldEnum | AutomationStatEventScalarFieldEnum[]
+  }
+
+  /**
+   * AutomationStatEvent create
+   */
+  export type AutomationStatEventCreateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * The data needed to create a AutomationStatEvent.
+     */
+    data: XOR<AutomationStatEventCreateInput, AutomationStatEventUncheckedCreateInput>
+  }
+
+  /**
+   * AutomationStatEvent createMany
+   */
+  export type AutomationStatEventCreateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to create many AutomationStatEvents.
+     */
+    data: AutomationStatEventCreateManyInput | AutomationStatEventCreateManyInput[]
+    skipDuplicates?: boolean
+  }
+
+  /**
+   * AutomationStatEvent createManyAndReturn
+   */
+  export type AutomationStatEventCreateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelectCreateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * The data used to create many AutomationStatEvents.
+     */
+    data: AutomationStatEventCreateManyInput | AutomationStatEventCreateManyInput[]
+    skipDuplicates?: boolean
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventIncludeCreateManyAndReturn<ExtArgs> | null
+  }
+
+  /**
+   * AutomationStatEvent update
+   */
+  export type AutomationStatEventUpdateArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * The data needed to update a AutomationStatEvent.
+     */
+    data: XOR<AutomationStatEventUpdateInput, AutomationStatEventUncheckedUpdateInput>
+    /**
+     * Choose, which AutomationStatEvent to update.
+     */
+    where: AutomationStatEventWhereUniqueInput
+  }
+
+  /**
+   * AutomationStatEvent updateMany
+   */
+  export type AutomationStatEventUpdateManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * The data used to update AutomationStatEvents.
+     */
+    data: XOR<AutomationStatEventUpdateManyMutationInput, AutomationStatEventUncheckedUpdateManyInput>
+    /**
+     * Filter which AutomationStatEvents to update
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * Limit how many AutomationStatEvents to update.
+     */
+    limit?: number
+  }
+
+  /**
+   * AutomationStatEvent updateManyAndReturn
+   */
+  export type AutomationStatEventUpdateManyAndReturnArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelectUpdateManyAndReturn<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * The data used to update AutomationStatEvents.
+     */
+    data: XOR<AutomationStatEventUpdateManyMutationInput, AutomationStatEventUncheckedUpdateManyInput>
+    /**
+     * Filter which AutomationStatEvents to update
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * Limit how many AutomationStatEvents to update.
+     */
+    limit?: number
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventIncludeUpdateManyAndReturn<ExtArgs> | null
+  }
+
+  /**
+   * AutomationStatEvent upsert
+   */
+  export type AutomationStatEventUpsertArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * The filter to search for the AutomationStatEvent to update in case it exists.
+     */
+    where: AutomationStatEventWhereUniqueInput
+    /**
+     * In case the AutomationStatEvent found by the `where` argument doesn't exist, create a new AutomationStatEvent with this data.
+     */
+    create: XOR<AutomationStatEventCreateInput, AutomationStatEventUncheckedCreateInput>
+    /**
+     * In case the AutomationStatEvent was found with the provided `where` argument, update it with this data.
+     */
+    update: XOR<AutomationStatEventUpdateInput, AutomationStatEventUncheckedUpdateInput>
+  }
+
+  /**
+   * AutomationStatEvent delete
+   */
+  export type AutomationStatEventDeleteArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
+    /**
+     * Filter which AutomationStatEvent to delete.
+     */
+    where: AutomationStatEventWhereUniqueInput
+  }
+
+  /**
+   * AutomationStatEvent deleteMany
+   */
+  export type AutomationStatEventDeleteManyArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Filter which AutomationStatEvents to delete
+     */
+    where?: AutomationStatEventWhereInput
+    /**
+     * Limit how many AutomationStatEvents to delete.
+     */
+    limit?: number
+  }
+
+  /**
+   * AutomationStatEvent without action
+   */
+  export type AutomationStatEventDefaultArgs<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
+    /**
+     * Select specific fields to fetch from the AutomationStatEvent
+     */
+    select?: AutomationStatEventSelect<ExtArgs> | null
+    /**
+     * Omit specific fields from the AutomationStatEvent
+     */
+    omit?: AutomationStatEventOmit<ExtArgs> | null
+    /**
+     * Choose, which related nodes to fetch as well
+     */
+    include?: AutomationStatEventInclude<ExtArgs> | null
   }
 
 
@@ -19633,6 +20958,8 @@ export namespace Prisma {
     ollamaModel: 'ollamaModel',
     enquiryTransferEnabled: 'enquiryTransferEnabled',
     enquiryTransferStartTime: 'enquiryTransferStartTime',
+    lostInquiryEnabled: 'lostInquiryEnabled',
+    lostInquiryStartTime: 'lostInquiryStartTime',
     lastScheduledRunId: 'lastScheduledRunId',
     lastScheduledRunAt: 'lastScheduledRunAt',
     createdAt: 'createdAt',
@@ -19772,6 +21099,21 @@ export namespace Prisma {
   };
 
   export type WorkflowRunScalarFieldEnum = (typeof WorkflowRunScalarFieldEnum)[keyof typeof WorkflowRunScalarFieldEnum]
+
+
+  export const AutomationStatEventScalarFieldEnum: {
+    id: 'id',
+    dealerId: 'dealerId',
+    workflowRunId: 'workflowRunId',
+    operation: 'operation',
+    startedByUserId: 'startedByUserId',
+    teamLeaderUserId: 'teamLeaderUserId',
+    salesConsultantUserId: 'salesConsultantUserId',
+    salesConsultantLabel: 'salesConsultantLabel',
+    occurredAt: 'occurredAt'
+  };
+
+  export type AutomationStatEventScalarFieldEnum = (typeof AutomationStatEventScalarFieldEnum)[keyof typeof AutomationStatEventScalarFieldEnum]
 
 
   export const AiCallScalarFieldEnum: {
@@ -20006,6 +21348,20 @@ export namespace Prisma {
 
 
   /**
+   * Reference to a field of type 'AutomationStatOperation'
+   */
+  export type EnumAutomationStatOperationFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'AutomationStatOperation'>
+    
+
+
+  /**
+   * Reference to a field of type 'AutomationStatOperation[]'
+   */
+  export type ListEnumAutomationStatOperationFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'AutomationStatOperation[]'>
+    
+
+
+  /**
    * Reference to a field of type 'AndroidDeviceStatus'
    */
   export type EnumAndroidDeviceStatusFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'AndroidDeviceStatus'>
@@ -20068,6 +21424,7 @@ export namespace Prisma {
     devices?: AndroidDeviceListRelationFilter
     voiceProfiles?: VoiceProfileListRelationFilter
     automationSettings?: XOR<DealerAutomationSettingsNullableScalarRelationFilter, DealerAutomationSettingsWhereInput> | null
+    automationStatEvents?: AutomationStatEventListRelationFilter
   }
 
   export type DealerOrderByWithRelationInput = {
@@ -20085,6 +21442,7 @@ export namespace Prisma {
     devices?: AndroidDeviceOrderByRelationAggregateInput
     voiceProfiles?: VoiceProfileOrderByRelationAggregateInput
     automationSettings?: DealerAutomationSettingsOrderByWithRelationInput
+    automationStatEvents?: AutomationStatEventOrderByRelationAggregateInput
   }
 
   export type DealerWhereUniqueInput = Prisma.AtLeast<{
@@ -20105,6 +21463,7 @@ export namespace Prisma {
     devices?: AndroidDeviceListRelationFilter
     voiceProfiles?: VoiceProfileListRelationFilter
     automationSettings?: XOR<DealerAutomationSettingsNullableScalarRelationFilter, DealerAutomationSettingsWhereInput> | null
+    automationStatEvents?: AutomationStatEventListRelationFilter
   }, "id">
 
   export type DealerOrderByWithAggregationInput = {
@@ -20149,6 +21508,8 @@ export namespace Prisma {
     ollamaModel?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     enquiryTransferEnabled?: BoolFilter<"DealerAutomationSettings"> | boolean
     enquiryTransferStartTime?: StringNullableFilter<"DealerAutomationSettings"> | string | null
+    lostInquiryEnabled?: BoolFilter<"DealerAutomationSettings"> | boolean
+    lostInquiryStartTime?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunId?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunAt?: DateTimeNullableFilter<"DealerAutomationSettings"> | Date | string | null
     createdAt?: DateTimeFilter<"DealerAutomationSettings"> | Date | string
@@ -20167,6 +21528,8 @@ export namespace Prisma {
     ollamaModel?: SortOrderInput | SortOrder
     enquiryTransferEnabled?: SortOrder
     enquiryTransferStartTime?: SortOrderInput | SortOrder
+    lostInquiryEnabled?: SortOrder
+    lostInquiryStartTime?: SortOrderInput | SortOrder
     lastScheduledRunId?: SortOrderInput | SortOrder
     lastScheduledRunAt?: SortOrderInput | SortOrder
     createdAt?: SortOrder
@@ -20188,6 +21551,8 @@ export namespace Prisma {
     ollamaModel?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     enquiryTransferEnabled?: BoolFilter<"DealerAutomationSettings"> | boolean
     enquiryTransferStartTime?: StringNullableFilter<"DealerAutomationSettings"> | string | null
+    lostInquiryEnabled?: BoolFilter<"DealerAutomationSettings"> | boolean
+    lostInquiryStartTime?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunId?: StringNullableFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunAt?: DateTimeNullableFilter<"DealerAutomationSettings"> | Date | string | null
     createdAt?: DateTimeFilter<"DealerAutomationSettings"> | Date | string
@@ -20206,6 +21571,8 @@ export namespace Prisma {
     ollamaModel?: SortOrderInput | SortOrder
     enquiryTransferEnabled?: SortOrder
     enquiryTransferStartTime?: SortOrderInput | SortOrder
+    lostInquiryEnabled?: SortOrder
+    lostInquiryStartTime?: SortOrderInput | SortOrder
     lastScheduledRunId?: SortOrderInput | SortOrder
     lastScheduledRunAt?: SortOrderInput | SortOrder
     createdAt?: SortOrder
@@ -20229,6 +21596,8 @@ export namespace Prisma {
     ollamaModel?: StringNullableWithAggregatesFilter<"DealerAutomationSettings"> | string | null
     enquiryTransferEnabled?: BoolWithAggregatesFilter<"DealerAutomationSettings"> | boolean
     enquiryTransferStartTime?: StringNullableWithAggregatesFilter<"DealerAutomationSettings"> | string | null
+    lostInquiryEnabled?: BoolWithAggregatesFilter<"DealerAutomationSettings"> | boolean
+    lostInquiryStartTime?: StringNullableWithAggregatesFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunId?: StringNullableWithAggregatesFilter<"DealerAutomationSettings"> | string | null
     lastScheduledRunAt?: DateTimeNullableWithAggregatesFilter<"DealerAutomationSettings"> | Date | string | null
     createdAt?: DateTimeWithAggregatesFilter<"DealerAutomationSettings"> | Date | string
@@ -20843,6 +22212,7 @@ export namespace Prisma {
     endedAt?: DateTimeNullableFilter<"WorkflowRun"> | Date | string | null
     dealer?: XOR<DealerScalarRelationFilter, DealerWhereInput>
     aiCalls?: AiCallListRelationFilter
+    automationStatEvents?: AutomationStatEventListRelationFilter
   }
 
   export type WorkflowRunOrderByWithRelationInput = {
@@ -20858,6 +22228,7 @@ export namespace Prisma {
     endedAt?: SortOrderInput | SortOrder
     dealer?: DealerOrderByWithRelationInput
     aiCalls?: AiCallOrderByRelationAggregateInput
+    automationStatEvents?: AutomationStatEventOrderByRelationAggregateInput
   }
 
   export type WorkflowRunWhereUniqueInput = Prisma.AtLeast<{
@@ -20876,6 +22247,7 @@ export namespace Prisma {
     endedAt?: DateTimeNullableFilter<"WorkflowRun"> | Date | string | null
     dealer?: XOR<DealerScalarRelationFilter, DealerWhereInput>
     aiCalls?: AiCallListRelationFilter
+    automationStatEvents?: AutomationStatEventListRelationFilter
   }, "id">
 
   export type WorkflowRunOrderByWithAggregationInput = {
@@ -20908,6 +22280,84 @@ export namespace Prisma {
     errorMessage?: StringNullableWithAggregatesFilter<"WorkflowRun"> | string | null
     startedAt?: DateTimeWithAggregatesFilter<"WorkflowRun"> | Date | string
     endedAt?: DateTimeNullableWithAggregatesFilter<"WorkflowRun"> | Date | string | null
+  }
+
+  export type AutomationStatEventWhereInput = {
+    AND?: AutomationStatEventWhereInput | AutomationStatEventWhereInput[]
+    OR?: AutomationStatEventWhereInput[]
+    NOT?: AutomationStatEventWhereInput | AutomationStatEventWhereInput[]
+    id?: StringFilter<"AutomationStatEvent"> | string
+    dealerId?: StringFilter<"AutomationStatEvent"> | string
+    workflowRunId?: StringFilter<"AutomationStatEvent"> | string
+    operation?: EnumAutomationStatOperationFilter<"AutomationStatEvent"> | $Enums.AutomationStatOperation
+    startedByUserId?: StringFilter<"AutomationStatEvent"> | string
+    teamLeaderUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantLabel?: StringFilter<"AutomationStatEvent"> | string
+    occurredAt?: DateTimeFilter<"AutomationStatEvent"> | Date | string
+    dealer?: XOR<DealerScalarRelationFilter, DealerWhereInput>
+    workflowRun?: XOR<WorkflowRunScalarRelationFilter, WorkflowRunWhereInput>
+  }
+
+  export type AutomationStatEventOrderByWithRelationInput = {
+    id?: SortOrder
+    dealerId?: SortOrder
+    workflowRunId?: SortOrder
+    operation?: SortOrder
+    startedByUserId?: SortOrder
+    teamLeaderUserId?: SortOrderInput | SortOrder
+    salesConsultantUserId?: SortOrderInput | SortOrder
+    salesConsultantLabel?: SortOrder
+    occurredAt?: SortOrder
+    dealer?: DealerOrderByWithRelationInput
+    workflowRun?: WorkflowRunOrderByWithRelationInput
+  }
+
+  export type AutomationStatEventWhereUniqueInput = Prisma.AtLeast<{
+    id?: string
+    AND?: AutomationStatEventWhereInput | AutomationStatEventWhereInput[]
+    OR?: AutomationStatEventWhereInput[]
+    NOT?: AutomationStatEventWhereInput | AutomationStatEventWhereInput[]
+    dealerId?: StringFilter<"AutomationStatEvent"> | string
+    workflowRunId?: StringFilter<"AutomationStatEvent"> | string
+    operation?: EnumAutomationStatOperationFilter<"AutomationStatEvent"> | $Enums.AutomationStatOperation
+    startedByUserId?: StringFilter<"AutomationStatEvent"> | string
+    teamLeaderUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantLabel?: StringFilter<"AutomationStatEvent"> | string
+    occurredAt?: DateTimeFilter<"AutomationStatEvent"> | Date | string
+    dealer?: XOR<DealerScalarRelationFilter, DealerWhereInput>
+    workflowRun?: XOR<WorkflowRunScalarRelationFilter, WorkflowRunWhereInput>
+  }, "id">
+
+  export type AutomationStatEventOrderByWithAggregationInput = {
+    id?: SortOrder
+    dealerId?: SortOrder
+    workflowRunId?: SortOrder
+    operation?: SortOrder
+    startedByUserId?: SortOrder
+    teamLeaderUserId?: SortOrderInput | SortOrder
+    salesConsultantUserId?: SortOrderInput | SortOrder
+    salesConsultantLabel?: SortOrder
+    occurredAt?: SortOrder
+    _count?: AutomationStatEventCountOrderByAggregateInput
+    _max?: AutomationStatEventMaxOrderByAggregateInput
+    _min?: AutomationStatEventMinOrderByAggregateInput
+  }
+
+  export type AutomationStatEventScalarWhereWithAggregatesInput = {
+    AND?: AutomationStatEventScalarWhereWithAggregatesInput | AutomationStatEventScalarWhereWithAggregatesInput[]
+    OR?: AutomationStatEventScalarWhereWithAggregatesInput[]
+    NOT?: AutomationStatEventScalarWhereWithAggregatesInput | AutomationStatEventScalarWhereWithAggregatesInput[]
+    id?: StringWithAggregatesFilter<"AutomationStatEvent"> | string
+    dealerId?: StringWithAggregatesFilter<"AutomationStatEvent"> | string
+    workflowRunId?: StringWithAggregatesFilter<"AutomationStatEvent"> | string
+    operation?: EnumAutomationStatOperationWithAggregatesFilter<"AutomationStatEvent"> | $Enums.AutomationStatOperation
+    startedByUserId?: StringWithAggregatesFilter<"AutomationStatEvent"> | string
+    teamLeaderUserId?: StringNullableWithAggregatesFilter<"AutomationStatEvent"> | string | null
+    salesConsultantUserId?: StringNullableWithAggregatesFilter<"AutomationStatEvent"> | string | null
+    salesConsultantLabel?: StringWithAggregatesFilter<"AutomationStatEvent"> | string
+    occurredAt?: DateTimeWithAggregatesFilter<"AutomationStatEvent"> | Date | string
   }
 
   export type AiCallWhereInput = {
@@ -21241,6 +22691,7 @@ export namespace Prisma {
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateInput = {
@@ -21258,6 +22709,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUpdateInput = {
@@ -21275,6 +22727,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateInput = {
@@ -21292,6 +22745,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerCreateManyInput = {
@@ -21334,6 +22788,8 @@ export namespace Prisma {
     ollamaModel?: string | null
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: string | null
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: string | null
     lastScheduledRunId?: string | null
     lastScheduledRunAt?: Date | string | null
     createdAt?: Date | string
@@ -21352,6 +22808,8 @@ export namespace Prisma {
     ollamaModel?: string | null
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: string | null
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: string | null
     lastScheduledRunId?: string | null
     lastScheduledRunAt?: Date | string | null
     createdAt?: Date | string
@@ -21368,6 +22826,8 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -21386,6 +22846,8 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -21403,6 +22865,8 @@ export namespace Prisma {
     ollamaModel?: string | null
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: string | null
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: string | null
     lastScheduledRunId?: string | null
     lastScheduledRunAt?: Date | string | null
     createdAt?: Date | string
@@ -21419,6 +22883,8 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -21436,6 +22902,8 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -22112,6 +23580,7 @@ export namespace Prisma {
     endedAt?: Date | string | null
     dealer: DealerCreateNestedOneWithoutRunsInput
     aiCalls?: AiCallCreateNestedManyWithoutWorkflowRunInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunUncheckedCreateInput = {
@@ -22126,6 +23595,7 @@ export namespace Prisma {
     startedAt?: Date | string
     endedAt?: Date | string | null
     aiCalls?: AiCallUncheckedCreateNestedManyWithoutWorkflowRunInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunUpdateInput = {
@@ -22140,6 +23610,7 @@ export namespace Prisma {
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     dealer?: DealerUpdateOneRequiredWithoutRunsNestedInput
     aiCalls?: AiCallUpdateManyWithoutWorkflowRunNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type WorkflowRunUncheckedUpdateInput = {
@@ -22154,6 +23625,7 @@ export namespace Prisma {
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     aiCalls?: AiCallUncheckedUpdateManyWithoutWorkflowRunNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type WorkflowRunCreateManyInput = {
@@ -22192,6 +23664,88 @@ export namespace Prisma {
     errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  }
+
+  export type AutomationStatEventCreateInput = {
+    id?: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+    dealer: DealerCreateNestedOneWithoutAutomationStatEventsInput
+    workflowRun: WorkflowRunCreateNestedOneWithoutAutomationStatEventsInput
+  }
+
+  export type AutomationStatEventUncheckedCreateInput = {
+    id?: string
+    dealerId: string
+    workflowRunId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+  }
+
+  export type AutomationStatEventUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dealer?: DealerUpdateOneRequiredWithoutAutomationStatEventsNestedInput
+    workflowRun?: WorkflowRunUpdateOneRequiredWithoutAutomationStatEventsNestedInput
+  }
+
+  export type AutomationStatEventUncheckedUpdateInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    dealerId?: StringFieldUpdateOperationsInput | string
+    workflowRunId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventCreateManyInput = {
+    id?: string
+    dealerId: string
+    workflowRunId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+  }
+
+  export type AutomationStatEventUpdateManyMutationInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUncheckedUpdateManyInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    dealerId?: StringFieldUpdateOperationsInput | string
+    workflowRunId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
 
   export type AiCallCreateInput = {
@@ -22610,6 +24164,12 @@ export namespace Prisma {
     isNot?: DealerAutomationSettingsWhereInput | null
   }
 
+  export type AutomationStatEventListRelationFilter = {
+    every?: AutomationStatEventWhereInput
+    some?: AutomationStatEventWhereInput
+    none?: AutomationStatEventWhereInput
+  }
+
   export type UserOrderByRelationAggregateInput = {
     _count?: SortOrder
   }
@@ -22631,6 +24191,10 @@ export namespace Prisma {
   }
 
   export type VoiceProfileOrderByRelationAggregateInput = {
+    _count?: SortOrder
+  }
+
+  export type AutomationStatEventOrderByRelationAggregateInput = {
     _count?: SortOrder
   }
 
@@ -22800,6 +24364,8 @@ export namespace Prisma {
     ollamaModel?: SortOrder
     enquiryTransferEnabled?: SortOrder
     enquiryTransferStartTime?: SortOrder
+    lostInquiryEnabled?: SortOrder
+    lostInquiryStartTime?: SortOrder
     lastScheduledRunId?: SortOrder
     lastScheduledRunAt?: SortOrder
     createdAt?: SortOrder
@@ -22815,6 +24381,8 @@ export namespace Prisma {
     ollamaModel?: SortOrder
     enquiryTransferEnabled?: SortOrder
     enquiryTransferStartTime?: SortOrder
+    lostInquiryEnabled?: SortOrder
+    lostInquiryStartTime?: SortOrder
     lastScheduledRunId?: SortOrder
     lastScheduledRunAt?: SortOrder
     createdAt?: SortOrder
@@ -22830,6 +24398,8 @@ export namespace Prisma {
     ollamaModel?: SortOrder
     enquiryTransferEnabled?: SortOrder
     enquiryTransferStartTime?: SortOrder
+    lostInquiryEnabled?: SortOrder
+    lostInquiryStartTime?: SortOrder
     lastScheduledRunId?: SortOrder
     lastScheduledRunAt?: SortOrder
     createdAt?: SortOrder
@@ -23371,6 +24941,64 @@ export namespace Prisma {
     _max?: NestedEnumWorkflowRunStatusFilter<$PrismaModel>
   }
 
+  export type EnumAutomationStatOperationFilter<$PrismaModel = never> = {
+    equals?: $Enums.AutomationStatOperation | EnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    in?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    notIn?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    not?: NestedEnumAutomationStatOperationFilter<$PrismaModel> | $Enums.AutomationStatOperation
+  }
+
+  export type WorkflowRunScalarRelationFilter = {
+    is?: WorkflowRunWhereInput
+    isNot?: WorkflowRunWhereInput
+  }
+
+  export type AutomationStatEventCountOrderByAggregateInput = {
+    id?: SortOrder
+    dealerId?: SortOrder
+    workflowRunId?: SortOrder
+    operation?: SortOrder
+    startedByUserId?: SortOrder
+    teamLeaderUserId?: SortOrder
+    salesConsultantUserId?: SortOrder
+    salesConsultantLabel?: SortOrder
+    occurredAt?: SortOrder
+  }
+
+  export type AutomationStatEventMaxOrderByAggregateInput = {
+    id?: SortOrder
+    dealerId?: SortOrder
+    workflowRunId?: SortOrder
+    operation?: SortOrder
+    startedByUserId?: SortOrder
+    teamLeaderUserId?: SortOrder
+    salesConsultantUserId?: SortOrder
+    salesConsultantLabel?: SortOrder
+    occurredAt?: SortOrder
+  }
+
+  export type AutomationStatEventMinOrderByAggregateInput = {
+    id?: SortOrder
+    dealerId?: SortOrder
+    workflowRunId?: SortOrder
+    operation?: SortOrder
+    startedByUserId?: SortOrder
+    teamLeaderUserId?: SortOrder
+    salesConsultantUserId?: SortOrder
+    salesConsultantLabel?: SortOrder
+    occurredAt?: SortOrder
+  }
+
+  export type EnumAutomationStatOperationWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: $Enums.AutomationStatOperation | EnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    in?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    notIn?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    not?: NestedEnumAutomationStatOperationWithAggregatesFilter<$PrismaModel> | $Enums.AutomationStatOperation
+    _count?: NestedIntFilter<$PrismaModel>
+    _min?: NestedEnumAutomationStatOperationFilter<$PrismaModel>
+    _max?: NestedEnumAutomationStatOperationFilter<$PrismaModel>
+  }
+
   export type WorkflowRunNullableScalarRelationFilter = {
     is?: WorkflowRunWhereInput | null
     isNot?: WorkflowRunWhereInput | null
@@ -23618,6 +25246,13 @@ export namespace Prisma {
     connect?: DealerAutomationSettingsWhereUniqueInput
   }
 
+  export type AutomationStatEventCreateNestedManyWithoutDealerInput = {
+    create?: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput> | AutomationStatEventCreateWithoutDealerInput[] | AutomationStatEventUncheckedCreateWithoutDealerInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutDealerInput | AutomationStatEventCreateOrConnectWithoutDealerInput[]
+    createMany?: AutomationStatEventCreateManyDealerInputEnvelope
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+  }
+
   export type UserUncheckedCreateNestedManyWithoutDealerInput = {
     create?: XOR<UserCreateWithoutDealerInput, UserUncheckedCreateWithoutDealerInput> | UserCreateWithoutDealerInput[] | UserUncheckedCreateWithoutDealerInput[]
     connectOrCreate?: UserCreateOrConnectWithoutDealerInput | UserCreateOrConnectWithoutDealerInput[]
@@ -23664,6 +25299,13 @@ export namespace Prisma {
     create?: XOR<DealerAutomationSettingsCreateWithoutDealerInput, DealerAutomationSettingsUncheckedCreateWithoutDealerInput>
     connectOrCreate?: DealerAutomationSettingsCreateOrConnectWithoutDealerInput
     connect?: DealerAutomationSettingsWhereUniqueInput
+  }
+
+  export type AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput = {
+    create?: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput> | AutomationStatEventCreateWithoutDealerInput[] | AutomationStatEventUncheckedCreateWithoutDealerInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutDealerInput | AutomationStatEventCreateOrConnectWithoutDealerInput[]
+    createMany?: AutomationStatEventCreateManyDealerInputEnvelope
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
   }
 
   export type StringFieldUpdateOperationsInput = {
@@ -23780,6 +25422,20 @@ export namespace Prisma {
     update?: XOR<XOR<DealerAutomationSettingsUpdateToOneWithWhereWithoutDealerInput, DealerAutomationSettingsUpdateWithoutDealerInput>, DealerAutomationSettingsUncheckedUpdateWithoutDealerInput>
   }
 
+  export type AutomationStatEventUpdateManyWithoutDealerNestedInput = {
+    create?: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput> | AutomationStatEventCreateWithoutDealerInput[] | AutomationStatEventUncheckedCreateWithoutDealerInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutDealerInput | AutomationStatEventCreateOrConnectWithoutDealerInput[]
+    upsert?: AutomationStatEventUpsertWithWhereUniqueWithoutDealerInput | AutomationStatEventUpsertWithWhereUniqueWithoutDealerInput[]
+    createMany?: AutomationStatEventCreateManyDealerInputEnvelope
+    set?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    disconnect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    delete?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    update?: AutomationStatEventUpdateWithWhereUniqueWithoutDealerInput | AutomationStatEventUpdateWithWhereUniqueWithoutDealerInput[]
+    updateMany?: AutomationStatEventUpdateManyWithWhereWithoutDealerInput | AutomationStatEventUpdateManyWithWhereWithoutDealerInput[]
+    deleteMany?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
+  }
+
   export type UserUncheckedUpdateManyWithoutDealerNestedInput = {
     create?: XOR<UserCreateWithoutDealerInput, UserUncheckedCreateWithoutDealerInput> | UserCreateWithoutDealerInput[] | UserUncheckedCreateWithoutDealerInput[]
     connectOrCreate?: UserCreateOrConnectWithoutDealerInput | UserCreateOrConnectWithoutDealerInput[]
@@ -23872,6 +25528,20 @@ export namespace Prisma {
     delete?: DealerAutomationSettingsWhereInput | boolean
     connect?: DealerAutomationSettingsWhereUniqueInput
     update?: XOR<XOR<DealerAutomationSettingsUpdateToOneWithWhereWithoutDealerInput, DealerAutomationSettingsUpdateWithoutDealerInput>, DealerAutomationSettingsUncheckedUpdateWithoutDealerInput>
+  }
+
+  export type AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput = {
+    create?: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput> | AutomationStatEventCreateWithoutDealerInput[] | AutomationStatEventUncheckedCreateWithoutDealerInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutDealerInput | AutomationStatEventCreateOrConnectWithoutDealerInput[]
+    upsert?: AutomationStatEventUpsertWithWhereUniqueWithoutDealerInput | AutomationStatEventUpsertWithWhereUniqueWithoutDealerInput[]
+    createMany?: AutomationStatEventCreateManyDealerInputEnvelope
+    set?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    disconnect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    delete?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    update?: AutomationStatEventUpdateWithWhereUniqueWithoutDealerInput | AutomationStatEventUpdateWithWhereUniqueWithoutDealerInput[]
+    updateMany?: AutomationStatEventUpdateManyWithWhereWithoutDealerInput | AutomationStatEventUpdateManyWithWhereWithoutDealerInput[]
+    deleteMany?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
   }
 
   export type DealerCreateNestedOneWithoutAutomationSettingsInput = {
@@ -24209,11 +25879,25 @@ export namespace Prisma {
     connect?: AiCallWhereUniqueInput | AiCallWhereUniqueInput[]
   }
 
+  export type AutomationStatEventCreateNestedManyWithoutWorkflowRunInput = {
+    create?: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput> | AutomationStatEventCreateWithoutWorkflowRunInput[] | AutomationStatEventUncheckedCreateWithoutWorkflowRunInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutWorkflowRunInput | AutomationStatEventCreateOrConnectWithoutWorkflowRunInput[]
+    createMany?: AutomationStatEventCreateManyWorkflowRunInputEnvelope
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+  }
+
   export type AiCallUncheckedCreateNestedManyWithoutWorkflowRunInput = {
     create?: XOR<AiCallCreateWithoutWorkflowRunInput, AiCallUncheckedCreateWithoutWorkflowRunInput> | AiCallCreateWithoutWorkflowRunInput[] | AiCallUncheckedCreateWithoutWorkflowRunInput[]
     connectOrCreate?: AiCallCreateOrConnectWithoutWorkflowRunInput | AiCallCreateOrConnectWithoutWorkflowRunInput[]
     createMany?: AiCallCreateManyWorkflowRunInputEnvelope
     connect?: AiCallWhereUniqueInput | AiCallWhereUniqueInput[]
+  }
+
+  export type AutomationStatEventUncheckedCreateNestedManyWithoutWorkflowRunInput = {
+    create?: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput> | AutomationStatEventCreateWithoutWorkflowRunInput[] | AutomationStatEventUncheckedCreateWithoutWorkflowRunInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutWorkflowRunInput | AutomationStatEventCreateOrConnectWithoutWorkflowRunInput[]
+    createMany?: AutomationStatEventCreateManyWorkflowRunInputEnvelope
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
   }
 
   export type EnumWorkflowRunStatusFieldUpdateOperationsInput = {
@@ -24242,6 +25926,20 @@ export namespace Prisma {
     deleteMany?: AiCallScalarWhereInput | AiCallScalarWhereInput[]
   }
 
+  export type AutomationStatEventUpdateManyWithoutWorkflowRunNestedInput = {
+    create?: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput> | AutomationStatEventCreateWithoutWorkflowRunInput[] | AutomationStatEventUncheckedCreateWithoutWorkflowRunInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutWorkflowRunInput | AutomationStatEventCreateOrConnectWithoutWorkflowRunInput[]
+    upsert?: AutomationStatEventUpsertWithWhereUniqueWithoutWorkflowRunInput | AutomationStatEventUpsertWithWhereUniqueWithoutWorkflowRunInput[]
+    createMany?: AutomationStatEventCreateManyWorkflowRunInputEnvelope
+    set?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    disconnect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    delete?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    update?: AutomationStatEventUpdateWithWhereUniqueWithoutWorkflowRunInput | AutomationStatEventUpdateWithWhereUniqueWithoutWorkflowRunInput[]
+    updateMany?: AutomationStatEventUpdateManyWithWhereWithoutWorkflowRunInput | AutomationStatEventUpdateManyWithWhereWithoutWorkflowRunInput[]
+    deleteMany?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
+  }
+
   export type AiCallUncheckedUpdateManyWithoutWorkflowRunNestedInput = {
     create?: XOR<AiCallCreateWithoutWorkflowRunInput, AiCallUncheckedCreateWithoutWorkflowRunInput> | AiCallCreateWithoutWorkflowRunInput[] | AiCallUncheckedCreateWithoutWorkflowRunInput[]
     connectOrCreate?: AiCallCreateOrConnectWithoutWorkflowRunInput | AiCallCreateOrConnectWithoutWorkflowRunInput[]
@@ -24254,6 +25952,52 @@ export namespace Prisma {
     update?: AiCallUpdateWithWhereUniqueWithoutWorkflowRunInput | AiCallUpdateWithWhereUniqueWithoutWorkflowRunInput[]
     updateMany?: AiCallUpdateManyWithWhereWithoutWorkflowRunInput | AiCallUpdateManyWithWhereWithoutWorkflowRunInput[]
     deleteMany?: AiCallScalarWhereInput | AiCallScalarWhereInput[]
+  }
+
+  export type AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunNestedInput = {
+    create?: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput> | AutomationStatEventCreateWithoutWorkflowRunInput[] | AutomationStatEventUncheckedCreateWithoutWorkflowRunInput[]
+    connectOrCreate?: AutomationStatEventCreateOrConnectWithoutWorkflowRunInput | AutomationStatEventCreateOrConnectWithoutWorkflowRunInput[]
+    upsert?: AutomationStatEventUpsertWithWhereUniqueWithoutWorkflowRunInput | AutomationStatEventUpsertWithWhereUniqueWithoutWorkflowRunInput[]
+    createMany?: AutomationStatEventCreateManyWorkflowRunInputEnvelope
+    set?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    disconnect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    delete?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    connect?: AutomationStatEventWhereUniqueInput | AutomationStatEventWhereUniqueInput[]
+    update?: AutomationStatEventUpdateWithWhereUniqueWithoutWorkflowRunInput | AutomationStatEventUpdateWithWhereUniqueWithoutWorkflowRunInput[]
+    updateMany?: AutomationStatEventUpdateManyWithWhereWithoutWorkflowRunInput | AutomationStatEventUpdateManyWithWhereWithoutWorkflowRunInput[]
+    deleteMany?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
+  }
+
+  export type DealerCreateNestedOneWithoutAutomationStatEventsInput = {
+    create?: XOR<DealerCreateWithoutAutomationStatEventsInput, DealerUncheckedCreateWithoutAutomationStatEventsInput>
+    connectOrCreate?: DealerCreateOrConnectWithoutAutomationStatEventsInput
+    connect?: DealerWhereUniqueInput
+  }
+
+  export type WorkflowRunCreateNestedOneWithoutAutomationStatEventsInput = {
+    create?: XOR<WorkflowRunCreateWithoutAutomationStatEventsInput, WorkflowRunUncheckedCreateWithoutAutomationStatEventsInput>
+    connectOrCreate?: WorkflowRunCreateOrConnectWithoutAutomationStatEventsInput
+    connect?: WorkflowRunWhereUniqueInput
+  }
+
+  export type EnumAutomationStatOperationFieldUpdateOperationsInput = {
+    set?: $Enums.AutomationStatOperation
+  }
+
+  export type DealerUpdateOneRequiredWithoutAutomationStatEventsNestedInput = {
+    create?: XOR<DealerCreateWithoutAutomationStatEventsInput, DealerUncheckedCreateWithoutAutomationStatEventsInput>
+    connectOrCreate?: DealerCreateOrConnectWithoutAutomationStatEventsInput
+    upsert?: DealerUpsertWithoutAutomationStatEventsInput
+    connect?: DealerWhereUniqueInput
+    update?: XOR<XOR<DealerUpdateToOneWithWhereWithoutAutomationStatEventsInput, DealerUpdateWithoutAutomationStatEventsInput>, DealerUncheckedUpdateWithoutAutomationStatEventsInput>
+  }
+
+  export type WorkflowRunUpdateOneRequiredWithoutAutomationStatEventsNestedInput = {
+    create?: XOR<WorkflowRunCreateWithoutAutomationStatEventsInput, WorkflowRunUncheckedCreateWithoutAutomationStatEventsInput>
+    connectOrCreate?: WorkflowRunCreateOrConnectWithoutAutomationStatEventsInput
+    upsert?: WorkflowRunUpsertWithoutAutomationStatEventsInput
+    connect?: WorkflowRunWhereUniqueInput
+    update?: XOR<XOR<WorkflowRunUpdateToOneWithWhereWithoutAutomationStatEventsInput, WorkflowRunUpdateWithoutAutomationStatEventsInput>, WorkflowRunUncheckedUpdateWithoutAutomationStatEventsInput>
   }
 
   export type InquiryCreateNestedOneWithoutAiCallsInput = {
@@ -24798,6 +26542,23 @@ export namespace Prisma {
     _max?: NestedEnumWorkflowRunStatusFilter<$PrismaModel>
   }
 
+  export type NestedEnumAutomationStatOperationFilter<$PrismaModel = never> = {
+    equals?: $Enums.AutomationStatOperation | EnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    in?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    notIn?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    not?: NestedEnumAutomationStatOperationFilter<$PrismaModel> | $Enums.AutomationStatOperation
+  }
+
+  export type NestedEnumAutomationStatOperationWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: $Enums.AutomationStatOperation | EnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    in?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    notIn?: $Enums.AutomationStatOperation[] | ListEnumAutomationStatOperationFieldRefInput<$PrismaModel>
+    not?: NestedEnumAutomationStatOperationWithAggregatesFilter<$PrismaModel> | $Enums.AutomationStatOperation
+    _count?: NestedIntFilter<$PrismaModel>
+    _min?: NestedEnumAutomationStatOperationFilter<$PrismaModel>
+    _max?: NestedEnumAutomationStatOperationFilter<$PrismaModel>
+  }
+
   export type NestedEnumAndroidDeviceStatusFilter<$PrismaModel = never> = {
     equals?: $Enums.AndroidDeviceStatus | EnumAndroidDeviceStatusFieldRefInput<$PrismaModel>
     in?: $Enums.AndroidDeviceStatus[] | ListEnumAndroidDeviceStatusFieldRefInput<$PrismaModel>
@@ -24961,6 +26722,7 @@ export namespace Prisma {
     startedAt?: Date | string
     endedAt?: Date | string | null
     aiCalls?: AiCallCreateNestedManyWithoutWorkflowRunInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunUncheckedCreateWithoutDealerInput = {
@@ -24974,6 +26736,7 @@ export namespace Prisma {
     startedAt?: Date | string
     endedAt?: Date | string | null
     aiCalls?: AiCallUncheckedCreateNestedManyWithoutWorkflowRunInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunCreateOrConnectWithoutDealerInput = {
@@ -25062,6 +26825,8 @@ export namespace Prisma {
     ollamaModel?: string | null
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: string | null
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: string | null
     lastScheduledRunId?: string | null
     lastScheduledRunAt?: Date | string | null
     createdAt?: Date | string
@@ -25078,6 +26843,8 @@ export namespace Prisma {
     ollamaModel?: string | null
     enquiryTransferEnabled?: boolean
     enquiryTransferStartTime?: string | null
+    lostInquiryEnabled?: boolean
+    lostInquiryStartTime?: string | null
     lastScheduledRunId?: string | null
     lastScheduledRunAt?: Date | string | null
     createdAt?: Date | string
@@ -25087,6 +26854,38 @@ export namespace Prisma {
   export type DealerAutomationSettingsCreateOrConnectWithoutDealerInput = {
     where: DealerAutomationSettingsWhereUniqueInput
     create: XOR<DealerAutomationSettingsCreateWithoutDealerInput, DealerAutomationSettingsUncheckedCreateWithoutDealerInput>
+  }
+
+  export type AutomationStatEventCreateWithoutDealerInput = {
+    id?: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+    workflowRun: WorkflowRunCreateNestedOneWithoutAutomationStatEventsInput
+  }
+
+  export type AutomationStatEventUncheckedCreateWithoutDealerInput = {
+    id?: string
+    workflowRunId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+  }
+
+  export type AutomationStatEventCreateOrConnectWithoutDealerInput = {
+    where: AutomationStatEventWhereUniqueInput
+    create: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput>
+  }
+
+  export type AutomationStatEventCreateManyDealerInputEnvelope = {
+    data: AutomationStatEventCreateManyDealerInput | AutomationStatEventCreateManyDealerInput[]
+    skipDuplicates?: boolean
   }
 
   export type UserUpsertWithWhereUniqueWithoutDealerInput = {
@@ -25302,6 +27101,8 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -25318,10 +27119,43 @@ export namespace Prisma {
     ollamaModel?: NullableStringFieldUpdateOperationsInput | string | null
     enquiryTransferEnabled?: BoolFieldUpdateOperationsInput | boolean
     enquiryTransferStartTime?: NullableStringFieldUpdateOperationsInput | string | null
+    lostInquiryEnabled?: BoolFieldUpdateOperationsInput | boolean
+    lostInquiryStartTime?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunId?: NullableStringFieldUpdateOperationsInput | string | null
     lastScheduledRunAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUpsertWithWhereUniqueWithoutDealerInput = {
+    where: AutomationStatEventWhereUniqueInput
+    update: XOR<AutomationStatEventUpdateWithoutDealerInput, AutomationStatEventUncheckedUpdateWithoutDealerInput>
+    create: XOR<AutomationStatEventCreateWithoutDealerInput, AutomationStatEventUncheckedCreateWithoutDealerInput>
+  }
+
+  export type AutomationStatEventUpdateWithWhereUniqueWithoutDealerInput = {
+    where: AutomationStatEventWhereUniqueInput
+    data: XOR<AutomationStatEventUpdateWithoutDealerInput, AutomationStatEventUncheckedUpdateWithoutDealerInput>
+  }
+
+  export type AutomationStatEventUpdateManyWithWhereWithoutDealerInput = {
+    where: AutomationStatEventScalarWhereInput
+    data: XOR<AutomationStatEventUpdateManyMutationInput, AutomationStatEventUncheckedUpdateManyWithoutDealerInput>
+  }
+
+  export type AutomationStatEventScalarWhereInput = {
+    AND?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
+    OR?: AutomationStatEventScalarWhereInput[]
+    NOT?: AutomationStatEventScalarWhereInput | AutomationStatEventScalarWhereInput[]
+    id?: StringFilter<"AutomationStatEvent"> | string
+    dealerId?: StringFilter<"AutomationStatEvent"> | string
+    workflowRunId?: StringFilter<"AutomationStatEvent"> | string
+    operation?: EnumAutomationStatOperationFilter<"AutomationStatEvent"> | $Enums.AutomationStatOperation
+    startedByUserId?: StringFilter<"AutomationStatEvent"> | string
+    teamLeaderUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantUserId?: StringNullableFilter<"AutomationStatEvent"> | string | null
+    salesConsultantLabel?: StringFilter<"AutomationStatEvent"> | string
+    occurredAt?: DateTimeFilter<"AutomationStatEvent"> | Date | string
   }
 
   export type DealerCreateWithoutAutomationSettingsInput = {
@@ -25338,6 +27172,7 @@ export namespace Prisma {
     runs?: WorkflowRunCreateNestedManyWithoutDealerInput
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutAutomationSettingsInput = {
@@ -25354,6 +27189,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedCreateNestedManyWithoutDealerInput
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutAutomationSettingsInput = {
@@ -25386,6 +27222,7 @@ export namespace Prisma {
     runs?: WorkflowRunUpdateManyWithoutDealerNestedInput
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutAutomationSettingsInput = {
@@ -25402,6 +27239,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedUpdateManyWithoutDealerNestedInput
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerCreateWithoutUsersInput = {
@@ -25418,6 +27256,7 @@ export namespace Prisma {
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutUsersInput = {
@@ -25434,6 +27273,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutUsersInput = {
@@ -25616,6 +27456,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutUsersInput = {
@@ -25632,6 +27473,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type UserUpsertWithoutDirectReportsInput = {
@@ -25854,6 +27696,7 @@ export namespace Prisma {
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutWorkflowsInput = {
@@ -25870,6 +27713,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutWorkflowsInput = {
@@ -25902,6 +27746,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutWorkflowsInput = {
@@ -25918,6 +27763,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerCreateWithoutInquiriesInput = {
@@ -25934,6 +27780,7 @@ export namespace Prisma {
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutInquiriesInput = {
@@ -25950,6 +27797,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutInquiriesInput = {
@@ -26044,6 +27892,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutInquiriesInput = {
@@ -26060,6 +27909,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type InquiryLogUpsertWithWhereUniqueWithoutInquiryInput = {
@@ -26216,6 +28066,7 @@ export namespace Prisma {
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutRunsInput = {
@@ -26232,6 +28083,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutRunsInput = {
@@ -26277,6 +28129,38 @@ export namespace Prisma {
     skipDuplicates?: boolean
   }
 
+  export type AutomationStatEventCreateWithoutWorkflowRunInput = {
+    id?: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+    dealer: DealerCreateNestedOneWithoutAutomationStatEventsInput
+  }
+
+  export type AutomationStatEventUncheckedCreateWithoutWorkflowRunInput = {
+    id?: string
+    dealerId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+  }
+
+  export type AutomationStatEventCreateOrConnectWithoutWorkflowRunInput = {
+    where: AutomationStatEventWhereUniqueInput
+    create: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput>
+  }
+
+  export type AutomationStatEventCreateManyWorkflowRunInputEnvelope = {
+    data: AutomationStatEventCreateManyWorkflowRunInput | AutomationStatEventCreateManyWorkflowRunInput[]
+    skipDuplicates?: boolean
+  }
+
   export type DealerUpsertWithoutRunsInput = {
     update: XOR<DealerUpdateWithoutRunsInput, DealerUncheckedUpdateWithoutRunsInput>
     create: XOR<DealerCreateWithoutRunsInput, DealerUncheckedCreateWithoutRunsInput>
@@ -26302,6 +28186,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutRunsInput = {
@@ -26318,6 +28203,7 @@ export namespace Prisma {
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type AiCallUpsertWithWhereUniqueWithoutWorkflowRunInput = {
@@ -26334,6 +28220,178 @@ export namespace Prisma {
   export type AiCallUpdateManyWithWhereWithoutWorkflowRunInput = {
     where: AiCallScalarWhereInput
     data: XOR<AiCallUpdateManyMutationInput, AiCallUncheckedUpdateManyWithoutWorkflowRunInput>
+  }
+
+  export type AutomationStatEventUpsertWithWhereUniqueWithoutWorkflowRunInput = {
+    where: AutomationStatEventWhereUniqueInput
+    update: XOR<AutomationStatEventUpdateWithoutWorkflowRunInput, AutomationStatEventUncheckedUpdateWithoutWorkflowRunInput>
+    create: XOR<AutomationStatEventCreateWithoutWorkflowRunInput, AutomationStatEventUncheckedCreateWithoutWorkflowRunInput>
+  }
+
+  export type AutomationStatEventUpdateWithWhereUniqueWithoutWorkflowRunInput = {
+    where: AutomationStatEventWhereUniqueInput
+    data: XOR<AutomationStatEventUpdateWithoutWorkflowRunInput, AutomationStatEventUncheckedUpdateWithoutWorkflowRunInput>
+  }
+
+  export type AutomationStatEventUpdateManyWithWhereWithoutWorkflowRunInput = {
+    where: AutomationStatEventScalarWhereInput
+    data: XOR<AutomationStatEventUpdateManyMutationInput, AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunInput>
+  }
+
+  export type DealerCreateWithoutAutomationStatEventsInput = {
+    id?: string
+    name: string
+    isActive?: boolean
+    maxTeamLeaders?: number
+    maxSalesConsultants?: number
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    users?: UserCreateNestedManyWithoutDealerInput
+    inquiries?: InquiryCreateNestedManyWithoutDealerInput
+    workflows?: DealerWorkflowCreateNestedManyWithoutDealerInput
+    runs?: WorkflowRunCreateNestedManyWithoutDealerInput
+    devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
+    voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
+    automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+  }
+
+  export type DealerUncheckedCreateWithoutAutomationStatEventsInput = {
+    id?: string
+    name: string
+    isActive?: boolean
+    maxTeamLeaders?: number
+    maxSalesConsultants?: number
+    createdAt?: Date | string
+    updatedAt?: Date | string
+    users?: UserUncheckedCreateNestedManyWithoutDealerInput
+    inquiries?: InquiryUncheckedCreateNestedManyWithoutDealerInput
+    workflows?: DealerWorkflowUncheckedCreateNestedManyWithoutDealerInput
+    runs?: WorkflowRunUncheckedCreateNestedManyWithoutDealerInput
+    devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
+    voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
+    automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+  }
+
+  export type DealerCreateOrConnectWithoutAutomationStatEventsInput = {
+    where: DealerWhereUniqueInput
+    create: XOR<DealerCreateWithoutAutomationStatEventsInput, DealerUncheckedCreateWithoutAutomationStatEventsInput>
+  }
+
+  export type WorkflowRunCreateWithoutAutomationStatEventsInput = {
+    id?: string
+    startedByUserId?: string | null
+    status?: $Enums.WorkflowRunStatus
+    currentStep?: string | null
+    runParams?: NullableJsonNullValueInput | InputJsonValue
+    browserSessionKey?: string | null
+    errorMessage?: string | null
+    startedAt?: Date | string
+    endedAt?: Date | string | null
+    dealer: DealerCreateNestedOneWithoutRunsInput
+    aiCalls?: AiCallCreateNestedManyWithoutWorkflowRunInput
+  }
+
+  export type WorkflowRunUncheckedCreateWithoutAutomationStatEventsInput = {
+    id?: string
+    dealerId: string
+    startedByUserId?: string | null
+    status?: $Enums.WorkflowRunStatus
+    currentStep?: string | null
+    runParams?: NullableJsonNullValueInput | InputJsonValue
+    browserSessionKey?: string | null
+    errorMessage?: string | null
+    startedAt?: Date | string
+    endedAt?: Date | string | null
+    aiCalls?: AiCallUncheckedCreateNestedManyWithoutWorkflowRunInput
+  }
+
+  export type WorkflowRunCreateOrConnectWithoutAutomationStatEventsInput = {
+    where: WorkflowRunWhereUniqueInput
+    create: XOR<WorkflowRunCreateWithoutAutomationStatEventsInput, WorkflowRunUncheckedCreateWithoutAutomationStatEventsInput>
+  }
+
+  export type DealerUpsertWithoutAutomationStatEventsInput = {
+    update: XOR<DealerUpdateWithoutAutomationStatEventsInput, DealerUncheckedUpdateWithoutAutomationStatEventsInput>
+    create: XOR<DealerCreateWithoutAutomationStatEventsInput, DealerUncheckedCreateWithoutAutomationStatEventsInput>
+    where?: DealerWhereInput
+  }
+
+  export type DealerUpdateToOneWithWhereWithoutAutomationStatEventsInput = {
+    where?: DealerWhereInput
+    data: XOR<DealerUpdateWithoutAutomationStatEventsInput, DealerUncheckedUpdateWithoutAutomationStatEventsInput>
+  }
+
+  export type DealerUpdateWithoutAutomationStatEventsInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    name?: StringFieldUpdateOperationsInput | string
+    isActive?: BoolFieldUpdateOperationsInput | boolean
+    maxTeamLeaders?: IntFieldUpdateOperationsInput | number
+    maxSalesConsultants?: IntFieldUpdateOperationsInput | number
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    users?: UserUpdateManyWithoutDealerNestedInput
+    inquiries?: InquiryUpdateManyWithoutDealerNestedInput
+    workflows?: DealerWorkflowUpdateManyWithoutDealerNestedInput
+    runs?: WorkflowRunUpdateManyWithoutDealerNestedInput
+    devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
+    voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
+    automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+  }
+
+  export type DealerUncheckedUpdateWithoutAutomationStatEventsInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    name?: StringFieldUpdateOperationsInput | string
+    isActive?: BoolFieldUpdateOperationsInput | boolean
+    maxTeamLeaders?: IntFieldUpdateOperationsInput | number
+    maxSalesConsultants?: IntFieldUpdateOperationsInput | number
+    createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    users?: UserUncheckedUpdateManyWithoutDealerNestedInput
+    inquiries?: InquiryUncheckedUpdateManyWithoutDealerNestedInput
+    workflows?: DealerWorkflowUncheckedUpdateManyWithoutDealerNestedInput
+    runs?: WorkflowRunUncheckedUpdateManyWithoutDealerNestedInput
+    devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
+    voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
+    automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+  }
+
+  export type WorkflowRunUpsertWithoutAutomationStatEventsInput = {
+    update: XOR<WorkflowRunUpdateWithoutAutomationStatEventsInput, WorkflowRunUncheckedUpdateWithoutAutomationStatEventsInput>
+    create: XOR<WorkflowRunCreateWithoutAutomationStatEventsInput, WorkflowRunUncheckedCreateWithoutAutomationStatEventsInput>
+    where?: WorkflowRunWhereInput
+  }
+
+  export type WorkflowRunUpdateToOneWithWhereWithoutAutomationStatEventsInput = {
+    where?: WorkflowRunWhereInput
+    data: XOR<WorkflowRunUpdateWithoutAutomationStatEventsInput, WorkflowRunUncheckedUpdateWithoutAutomationStatEventsInput>
+  }
+
+  export type WorkflowRunUpdateWithoutAutomationStatEventsInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    startedByUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    status?: EnumWorkflowRunStatusFieldUpdateOperationsInput | $Enums.WorkflowRunStatus
+    currentStep?: NullableStringFieldUpdateOperationsInput | string | null
+    runParams?: NullableJsonNullValueInput | InputJsonValue
+    browserSessionKey?: NullableStringFieldUpdateOperationsInput | string | null
+    errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
+    startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    dealer?: DealerUpdateOneRequiredWithoutRunsNestedInput
+    aiCalls?: AiCallUpdateManyWithoutWorkflowRunNestedInput
+  }
+
+  export type WorkflowRunUncheckedUpdateWithoutAutomationStatEventsInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    dealerId?: StringFieldUpdateOperationsInput | string
+    startedByUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    status?: EnumWorkflowRunStatusFieldUpdateOperationsInput | $Enums.WorkflowRunStatus
+    currentStep?: NullableStringFieldUpdateOperationsInput | string | null
+    runParams?: NullableJsonNullValueInput | InputJsonValue
+    browserSessionKey?: NullableStringFieldUpdateOperationsInput | string | null
+    errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
+    startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    aiCalls?: AiCallUncheckedUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type InquiryCreateWithoutAiCallsInput = {
@@ -26384,6 +28442,7 @@ export namespace Prisma {
     startedAt?: Date | string
     endedAt?: Date | string | null
     dealer: DealerCreateNestedOneWithoutRunsInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunUncheckedCreateWithoutAiCallsInput = {
@@ -26397,6 +28456,7 @@ export namespace Prisma {
     errorMessage?: string | null
     startedAt?: Date | string
     endedAt?: Date | string | null
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutWorkflowRunInput
   }
 
   export type WorkflowRunCreateOrConnectWithoutAiCallsInput = {
@@ -26553,6 +28613,7 @@ export namespace Prisma {
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     dealer?: DealerUpdateOneRequiredWithoutRunsNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type WorkflowRunUncheckedUpdateWithoutAiCallsInput = {
@@ -26566,6 +28627,7 @@ export namespace Prisma {
     errorMessage?: NullableStringFieldUpdateOperationsInput | string | null
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type AndroidDeviceUpsertWithoutAiCallsInput = {
@@ -26751,6 +28813,7 @@ export namespace Prisma {
     runs?: WorkflowRunCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutDevicesInput = {
@@ -26767,6 +28830,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedCreateNestedManyWithoutDealerInput
     voiceProfiles?: VoiceProfileUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutDevicesInput = {
@@ -26837,6 +28901,7 @@ export namespace Prisma {
     runs?: WorkflowRunUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutDevicesInput = {
@@ -26853,6 +28918,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedUpdateManyWithoutDealerNestedInput
     voiceProfiles?: VoiceProfileUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type AiCallUpsertWithWhereUniqueWithoutAndroidDeviceInput = {
@@ -26885,6 +28951,7 @@ export namespace Prisma {
     runs?: WorkflowRunCreateNestedManyWithoutDealerInput
     devices?: AndroidDeviceCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventCreateNestedManyWithoutDealerInput
   }
 
   export type DealerUncheckedCreateWithoutVoiceProfilesInput = {
@@ -26901,6 +28968,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedCreateNestedManyWithoutDealerInput
     devices?: AndroidDeviceUncheckedCreateNestedManyWithoutDealerInput
     automationSettings?: DealerAutomationSettingsUncheckedCreateNestedOneWithoutDealerInput
+    automationStatEvents?: AutomationStatEventUncheckedCreateNestedManyWithoutDealerInput
   }
 
   export type DealerCreateOrConnectWithoutVoiceProfilesInput = {
@@ -27014,6 +29082,7 @@ export namespace Prisma {
     runs?: WorkflowRunUpdateManyWithoutDealerNestedInput
     devices?: AndroidDeviceUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutDealerNestedInput
   }
 
   export type DealerUncheckedUpdateWithoutVoiceProfilesInput = {
@@ -27030,6 +29099,7 @@ export namespace Prisma {
     runs?: WorkflowRunUncheckedUpdateManyWithoutDealerNestedInput
     devices?: AndroidDeviceUncheckedUpdateManyWithoutDealerNestedInput
     automationSettings?: DealerAutomationSettingsUncheckedUpdateOneWithoutDealerNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutDealerNestedInput
   }
 
   export type UserUpsertWithoutVoiceProfilesInput = {
@@ -27167,6 +29237,17 @@ export namespace Prisma {
     status?: $Enums.VoiceProfileStatus
     createdAt?: Date | string
     updatedAt?: Date | string
+  }
+
+  export type AutomationStatEventCreateManyDealerInput = {
+    id?: string
+    workflowRunId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
   }
 
   export type UserUpdateWithoutDealerInput = {
@@ -27307,6 +29388,7 @@ export namespace Prisma {
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     aiCalls?: AiCallUpdateManyWithoutWorkflowRunNestedInput
+    automationStatEvents?: AutomationStatEventUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type WorkflowRunUncheckedUpdateWithoutDealerInput = {
@@ -27320,6 +29402,7 @@ export namespace Prisma {
     startedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     endedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     aiCalls?: AiCallUncheckedUpdateManyWithoutWorkflowRunNestedInput
+    automationStatEvents?: AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunNestedInput
   }
 
   export type WorkflowRunUncheckedUpdateManyWithoutDealerInput = {
@@ -27399,6 +29482,39 @@ export namespace Prisma {
     status?: EnumVoiceProfileStatusFieldUpdateOperationsInput | $Enums.VoiceProfileStatus
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUpdateWithoutDealerInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    workflowRun?: WorkflowRunUpdateOneRequiredWithoutAutomationStatEventsNestedInput
+  }
+
+  export type AutomationStatEventUncheckedUpdateWithoutDealerInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    workflowRunId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUncheckedUpdateManyWithoutDealerInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    workflowRunId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
 
   export type UserCreateManyReportsToInput = {
@@ -27608,6 +29724,17 @@ export namespace Prisma {
     updatedAt?: Date | string
   }
 
+  export type AutomationStatEventCreateManyWorkflowRunInput = {
+    id?: string
+    dealerId: string
+    operation: $Enums.AutomationStatOperation
+    startedByUserId: string
+    teamLeaderUserId?: string | null
+    salesConsultantUserId?: string | null
+    salesConsultantLabel: string
+    occurredAt?: Date | string
+  }
+
   export type AiCallUpdateWithoutWorkflowRunInput = {
     id?: StringFieldUpdateOperationsInput | string
     stateMachine?: JsonNullValueInput | InputJsonValue
@@ -27647,6 +29774,39 @@ export namespace Prisma {
     callEndedAt?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUpdateWithoutWorkflowRunInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+    dealer?: DealerUpdateOneRequiredWithoutAutomationStatEventsNestedInput
+  }
+
+  export type AutomationStatEventUncheckedUpdateWithoutWorkflowRunInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    dealerId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
+  }
+
+  export type AutomationStatEventUncheckedUpdateManyWithoutWorkflowRunInput = {
+    id?: StringFieldUpdateOperationsInput | string
+    dealerId?: StringFieldUpdateOperationsInput | string
+    operation?: EnumAutomationStatOperationFieldUpdateOperationsInput | $Enums.AutomationStatOperation
+    startedByUserId?: StringFieldUpdateOperationsInput | string
+    teamLeaderUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantUserId?: NullableStringFieldUpdateOperationsInput | string | null
+    salesConsultantLabel?: StringFieldUpdateOperationsInput | string
+    occurredAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
 
   export type CallLogCreateManyAiCallInput = {

@@ -6,7 +6,7 @@ import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms
 
 import { getActiveSession } from "./active-sessions.js";
 
-import { runEnquiryTransfer } from "./enquiry-transfer.js";
+import { isAnyEnquiryModalVisible, runEnquiryTransfer } from "./enquiry-transfer.js";
 import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 
@@ -19,6 +19,7 @@ import {
 
 import { applyInputGuardToPage } from "./automation-browser-setup.js";
 import { env } from "./config.js";
+import type { ExecutePayload } from "./runner.js";
 
 const prisma = createPrisma();
 
@@ -36,6 +37,69 @@ async function waitIfPaused(redis: Redis, runId: string): Promise<void> {
     if ((await redis.get(redisControlKey(runId, "pause"))) !== "1") return;
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+async function restartEnquiryTransferOnSession(
+  runId: string,
+  redisClient: Redis,
+  page: import("playwright").Page,
+  dealerId: string,
+  payload: ExecutePayload,
+  log: (level: LogLinePayload["level"], message: string) => Promise<void>,
+): Promise<void> {
+  await prisma.workflowRun.update({
+    where: { id: runId },
+    data: { status: "RUNNING", errorMessage: null, endedAt: null },
+  });
+  await publish(redisClient, SocketEvents.WORKFLOW_STARTED, dealerId, {
+    workflowRunId: runId,
+    dealerId,
+  });
+
+  const signalManualIntervention = async (message: string): Promise<never> => {
+    await prisma.workflowRun.update({
+      where: { id: runId },
+      data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
+    });
+    await publish(redisClient, SocketEvents.WORKFLOW_PAUSED_USER, dealerId, {
+      workflowRunId: runId,
+      message,
+    });
+    await log("error", message);
+    throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
+  };
+
+  if (!(await isOnCustomerEnquiryList(page)) && !(await isAnyEnquiryModalVisible(page))) {
+    await waitForGdmsDashboardReady(page, log, 180_000, {
+      redis: redisClient,
+      runId,
+      dealerId,
+      shouldStop: () => isStopped(redisClient, runId),
+    });
+  } else if (await isAnyEnquiryModalVisible(page)) {
+    await log("info", "Open enquiry modal detected — continuing Follow Up / Save on this screen.");
+  } else {
+    await log("info", "Already on Customer Enquiry — continuing search.");
+  }
+
+  const remarkConfig = await loadDealerRemarkConfig(dealerId);
+  await runEnquiryTransfer({
+    page,
+    runId,
+    dealerId,
+    startedByUserId: payload.startedByUserId,
+    redis: redisClient,
+    sources: payload.sources,
+    subSources: payload.subSources,
+    remarkConfig: {
+      defaultEnquiryRemarkBase: remarkConfig.defaultEnquiryRemarkBase,
+      enquiryRemarkRules: remarkConfig.enquiryRemarkRules,
+    },
+    log,
+    shouldStop: () => isStopped(redisClient, runId),
+    waitIfPaused: () => waitIfPaused(redisClient, runId),
+    signalManualIntervention,
+  });
 }
 
 /** Resume or restart enquiry transfer on the open visible browser. */
@@ -61,68 +125,27 @@ export async function retryEnquiryTransfer(runId: string): Promise<void> {
 
   try {
     const run = await prisma.workflowRun.findUnique({ where: { id: runId } });
+    const onModal = await isAnyEnquiryModalVisible(page);
 
     if (run?.status === "RUNNING") {
       await setResumeTransferRequest(redisClient, runId);
       await log(
         "info",
-        "Continue transfer signalled — if GDMS home is already open, automation will proceed shortly.",
+        onModal
+          ? "Continue transfer signalled — open enquiry modal detected; automation will resume Follow Up / Save shortly."
+          : "Continue transfer signalled — if GDMS home is already open, automation will proceed shortly.",
       );
       return;
     }
 
-    await prisma.workflowRun.update({
-      where: { id: runId },
-      data: { status: "RUNNING", errorMessage: null, endedAt: null },
-    });
-    await publish(redisClient, SocketEvents.WORKFLOW_STARTED, dealerId, {
-      workflowRunId: runId,
-      dealerId,
-    });
-    await log("info", "Restarting enquiry transfer on the active browser session.");
-
-    const signalManualIntervention = async (message: string): Promise<never> => {
-      await prisma.workflowRun.update({
-        where: { id: runId },
-        data: { status: "PAUSED_USER", errorMessage: message, endedAt: new Date() },
-      });
-      await publish(redisClient, SocketEvents.WORKFLOW_PAUSED_USER, dealerId, {
-        workflowRunId: runId,
-        message,
-      });
-      await log("error", message);
-      throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
-    };
-
-    if (!(await isOnCustomerEnquiryList(page))) {
-      await waitForGdmsDashboardReady(page, log, 180_000, {
-        redis: redisClient,
-        runId,
-        dealerId,
-        shouldStop: () => isStopped(redisClient, runId),
-      });
+    if (onModal) {
+      await log("info", "Open enquiry modal — resuming Follow Up on current screen (no list restart).");
+    } else if (run?.status === "PAUSED_USER" || run?.status === "FAILED") {
+      await log("info", "Resuming paused enquiry transfer on the open browser session.");
     } else {
-      await log("info", "Already on Customer Enquiry — continuing search.");
+      await log("info", "Restarting enquiry transfer on the active browser session.");
     }
-
-    const remarkConfig = await loadDealerRemarkConfig(dealerId);
-    await runEnquiryTransfer({
-      page,
-      runId,
-      dealerId,
-      startedByUserId: payload.startedByUserId,
-      redis: redisClient,
-      sources: payload.sources,
-      subSources: payload.subSources,
-      remarkConfig: {
-        defaultEnquiryRemarkBase: remarkConfig.defaultEnquiryRemarkBase,
-        enquiryRemarkRules: remarkConfig.enquiryRemarkRules,
-      },
-      log,
-      shouldStop: () => isStopped(redisClient, runId),
-      waitIfPaused: () => waitIfPaused(redisClient, runId),
-      signalManualIntervention,
-    });
+    await restartEnquiryTransferOnSession(runId, redisClient, page, dealerId, payload, log);
   } catch (e) {
     const msg = String(e);
     const stopped = msg === "stopped" || (e instanceof Error && e.message === "stopped");

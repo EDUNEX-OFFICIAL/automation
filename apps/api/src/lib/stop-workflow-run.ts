@@ -74,3 +74,24 @@ export async function stopFollowUpSkipRunsForDealer(
 
   return runs.map((r) => r.id);
 }
+
+/** Force-stop all active Lost Inquiry runs when settings toggle is turned off. */
+export async function stopLostInquiryRunsForDealer(
+  dealerId: string,
+  reason = "Lost Inquiry disabled in Settings — automation stopped.",
+): Promise<string[]> {
+  const runs = await prisma.workflowRun.findMany({
+    where: {
+      dealerId,
+      status: { in: [...ACTIVE_STATUSES] },
+      runParams: { path: ["operation"], equals: "lost_inquiry" },
+    },
+    select: { id: true },
+  });
+
+  for (const run of runs) {
+    await stopWorkflowRun(run.id, dealerId, reason);
+  }
+
+  return runs.map((r) => r.id);
+}

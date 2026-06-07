@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { canRunAutomation, homePathForRole } from "@/lib/roles";
 import { useAuthStore } from "@/stores/auth-store";
 
-const AUTOMATION_PATHS = ["/dashboard", "/live-session"];
+const AUTOMATION_PATHS = ["/operations", "/live-session"];
 
 export function AutomationRouteGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();

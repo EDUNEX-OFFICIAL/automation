@@ -62,6 +62,9 @@ export default function SettingsPage() {
   const [ollamaModel, setOllamaModel] = useState("llama3.2");
   const [followUpSkipEnabled, setFollowUpSkipEnabled] = useState(false);
   const [followUpSkipStartTime, setFollowUpSkipStartTime] = useState("09:00");
+  const [lostInquiryEnabled, setLostInquiryEnabled] = useState(false);
+  const [lostInquiryStartTime, setLostInquiryStartTime] = useState("10:00");
+  const [lostInquiryRunNowStarting, setLostInquiryRunNowStarting] = useState(false);
   const [automationSettingsOk, setAutomationSettingsOk] = useState(false);
   const [automationSettingsSaving, setAutomationSettingsSaving] = useState(false);
   const [canEditRemarks, setCanEditRemarks] = useState(false);
@@ -131,6 +134,8 @@ export default function SettingsPage() {
               if (!cancelled) {
                 setFollowUpSkipEnabled(settings.followUpSkipEnabled);
                 setFollowUpSkipStartTime(settings.followUpSkipStartTime ?? "09:00");
+                setLostInquiryEnabled(settings.lostInquiryEnabled);
+                setLostInquiryStartTime(settings.lostInquiryStartTime ?? "10:00");
                 setOllamaModel(settings.ollamaModel ?? "llama3.2");
                 setCanEditRemarks(settings.canEditRemarks);
                 setRemarkSettings({
@@ -257,6 +262,25 @@ export default function SettingsPage() {
     router.replace("/login");
   }
 
+  async function runLostInquiryNow(): Promise<void> {
+    const tk = token;
+    if (!tk || !dealerId || lostInquiryRunNowStarting) return;
+    setErrMsg(null);
+    setLostInquiryRunNowStarting(true);
+    try {
+      await apiFetch<{ runId: string }>(
+        `/v1/dealers/${encodeURIComponent(dealerId)}/automation-settings/run-now?operation=lost_inquiry`,
+        { method: "POST", token: tk, body: JSON.stringify({}) },
+      );
+      setPairMsg("Lost Inquiry started — open Live session to watch.");
+      router.push("/live-session");
+    } catch (e) {
+      setErrMsg(toUserMessage(e, "generic"));
+    } finally {
+      setLostInquiryRunNowStarting(false);
+    }
+  }
+
   async function saveAutomationSettings(): Promise<void> {
     setErrMsg(null);
     setAutomationSettingsOk(false);
@@ -267,6 +291,10 @@ export default function SettingsPage() {
     }
     if (followUpSkipEnabled && !followUpSkipStartTime.trim()) {
       setErrMsg("Set a daily start time for Follow Up Skip (IST).");
+      return;
+    }
+    if (lostInquiryEnabled && !lostInquiryStartTime.trim()) {
+      setErrMsg("Set a Saturday start time for Lost Inquiry (IST).");
       return;
     }
     if (canEditRemarks) {
@@ -286,6 +314,8 @@ export default function SettingsPage() {
       const payload: DealerAutomationSettingsPayload = {
         followUpSkipEnabled,
         followUpSkipStartTime: followUpSkipEnabled ? followUpSkipStartTime.trim() : null,
+        lostInquiryEnabled,
+        lostInquiryStartTime: lostInquiryEnabled ? lostInquiryStartTime.trim() : null,
         ollamaModel: ollamaModel.trim() || null,
       };
       if (canEditRemarks) {
@@ -312,6 +342,13 @@ export default function SettingsPage() {
       if (!followUpSkipEnabled && (saved.stoppedRunIds?.length ?? 0) > 0) {
         setPairMsg(
           `Follow Up Skip disabled — force-stopped ${saved.stoppedRunIds!.length} running automation(s).`,
+        );
+      }
+      if (!lostInquiryEnabled && (saved.stoppedRunIds?.length ?? 0) > 0) {
+        setPairMsg((prev) =>
+          prev
+            ? `${prev} Lost Inquiry runs also stopped.`
+            : `Lost Inquiry disabled — stopped in-flight run(s).`,
         );
       }
     } catch (e) {
@@ -459,6 +496,7 @@ export default function SettingsPage() {
           ) : null}
 
           {settingsTab === "schedule" && showScheduleSettings ? (
+          <>
           <Card>
             <CardHeader>
               <CardTitle>Follow Up Skip (Today&apos;s Follow Up)</CardTitle>
@@ -495,6 +533,55 @@ export default function SettingsPage() {
               </Button>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Lost Inquiry (Today&apos;s Follow Up)</CardTitle>
+            </CardHeader>
+            <CardContent className="max-w-xl space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Runs weekly on <strong>Saturdays</strong> at the chosen IST time. Uses Ollama (AI tab) for
+                Cancelation Info dropdowns.
+              </p>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="rounded border-border"
+                  checked={lostInquiryEnabled}
+                  onChange={(e) => setLostInquiryEnabled(e.target.checked)}
+                />
+                Lost Inquiry enabled
+              </label>
+              {lostInquiryEnabled ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="lost-inquiry-time">Saturday start time (IST, 24h)</Label>
+                  <Input
+                    id="lost-inquiry-time"
+                    type="time"
+                    value={lostInquiryStartTime}
+                    onChange={(e) => setLostInquiryStartTime(e.target.value)}
+                  />
+                </div>
+              ) : null}
+              {dealerId ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    bootstrapPending ||
+                    !dealerId ||
+                    automationSettingsSaving ||
+                    lostInquiryRunNowStarting ||
+                    !lostInquiryEnabled
+                  }
+                  onClick={() => void runLostInquiryNow()}
+                >
+                  {lostInquiryRunNowStarting ? "Starting…" : "Run now"}
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
+          </>
           ) : null}
           </>
           )}

@@ -135,6 +135,15 @@ export function followUpSkipWorkflow(): WorkflowDefinition {
   };
 }
 
+/** Placeholder — Lost Inquiry logic runs in automation-service after login. */
+export function lostInquiryWorkflow(): WorkflowDefinition {
+  return {
+    version: "1",
+    name: "lost_inquiry",
+    steps: [],
+  };
+}
+
 export function inquiryFetchWorkflow(listUrl: string): WorkflowDefinition {
   return {
     version: "1",

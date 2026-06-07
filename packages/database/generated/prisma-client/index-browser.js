@@ -142,6 +142,8 @@ exports.Prisma.DealerAutomationSettingsScalarFieldEnum = {
   ollamaModel: 'ollamaModel',
   enquiryTransferEnabled: 'enquiryTransferEnabled',
   enquiryTransferStartTime: 'enquiryTransferStartTime',
+  lostInquiryEnabled: 'lostInquiryEnabled',
+  lostInquiryStartTime: 'lostInquiryStartTime',
   lastScheduledRunId: 'lastScheduledRunId',
   lastScheduledRunAt: 'lastScheduledRunAt',
   createdAt: 'createdAt',
@@ -253,6 +255,18 @@ exports.Prisma.WorkflowRunScalarFieldEnum = {
   endedAt: 'endedAt'
 };
 
+exports.Prisma.AutomationStatEventScalarFieldEnum = {
+  id: 'id',
+  dealerId: 'dealerId',
+  workflowRunId: 'workflowRunId',
+  operation: 'operation',
+  startedByUserId: 'startedByUserId',
+  teamLeaderUserId: 'teamLeaderUserId',
+  salesConsultantUserId: 'salesConsultantUserId',
+  salesConsultantLabel: 'salesConsultantLabel',
+  occurredAt: 'occurredAt'
+};
+
 exports.Prisma.AiCallScalarFieldEnum = {
   id: 'id',
   inquiryId: 'inquiryId',
@@ -358,6 +372,12 @@ exports.WorkflowRunStatus = exports.$Enums.WorkflowRunStatus = {
   STOPPED: 'STOPPED'
 };
 
+exports.AutomationStatOperation = exports.$Enums.AutomationStatOperation = {
+  enquiry_transfer: 'enquiry_transfer',
+  follow_up_skip: 'follow_up_skip',
+  lost_inquiry: 'lost_inquiry'
+};
+
 exports.AndroidDeviceStatus = exports.$Enums.AndroidDeviceStatus = {
   OFFLINE: 'OFFLINE',
   ONLINE: 'ONLINE',
@@ -382,6 +402,7 @@ exports.Prisma.ModelName = {
   Inquiry: 'Inquiry',
   InquiryLog: 'InquiryLog',
   WorkflowRun: 'WorkflowRun',
+  AutomationStatEvent: 'AutomationStatEvent',
   AiCall: 'AiCall',
   CallLog: 'CallLog',
   AndroidDevice: 'AndroidDevice',

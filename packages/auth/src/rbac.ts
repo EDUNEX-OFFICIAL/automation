@@ -84,8 +84,54 @@ export function canStartWorkflow(role: Role): boolean {
   return canRunAutomation(role);
 }
 
+export function canViewAutomationStats(role: Role): boolean {
+  return (
+    role === "SUPER_ADMIN" ||
+    role === "DEALER_ADMIN" ||
+    role === "TEAM_LEADER" ||
+    role === "SALES_CONSULTANT"
+  );
+}
+
 export function canViewLeads(role: Role): boolean {
   return canRunAutomation(role) || role === "DEALER_ADMIN";
+}
+
+/** Filter AutomationStatEvent rows for the requesting actor. */
+export function automationStatsScopeForActor(actor: {
+  sub: string;
+  role: Role;
+  dealerId: string | null;
+}): {
+  dealerId?: string;
+  teamLeaderUserId?: string;
+  /** TL dashboard: include events for this team leader (see buildWhere). */
+  teamLeaderScopeUserId?: string;
+  salesConsultantUserId?: string;
+  startedByUserId?: string;
+  orSelf?: { salesConsultantUserId: string; startedByUserId: string };
+} {
+  switch (actor.role) {
+    case "SUPER_ADMIN":
+      return {};
+    case "DEALER_ADMIN":
+      return actor.dealerId ? { dealerId: actor.dealerId } : { dealerId: "__none__" };
+    case "TEAM_LEADER":
+      return actor.dealerId
+        ? {
+            dealerId: actor.dealerId,
+            /** Match events tagged to TL, started by TL, or with null teamLeader on backfill rows. */
+            teamLeaderScopeUserId: actor.sub,
+          }
+        : { dealerId: "__none__" };
+    case "SALES_CONSULTANT":
+      return {
+        orSelf: { salesConsultantUserId: actor.sub, startedByUserId: actor.sub },
+        ...(actor.dealerId ? { dealerId: actor.dealerId } : {}),
+      };
+    default:
+      return { dealerId: "__none__" };
+  }
 }
 
 export function canAccessDealer(userDealerId: string | null, targetDealerId: string, role: Role): boolean {

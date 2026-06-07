@@ -117,23 +117,36 @@ export const automationEnvSchema = z.object({
     .transform((s) => s === "true" || s === "1"),
   GDMS_VNC_PASSWORD: z.string().min(4).optional(),
   /**
-   * UI pacing scale: 1.0 = baseline, ~0.65 = faster but even (use with pause tiers in human-delay).
+   * UI pacing scale fallback when no operation-specific multiplier is active.
+   * 1.0 = legacy baseline; production targets ~50–80s ET / ~30–60s FUS per item.
    */
-  GDMS_SPEED_MULTIPLIER: z.coerce.number().min(0.25).max(1.5).default(0.65),
-  /** Short hover / micro-pauses between clicks (enquiry transfer humanization). */
-  GDMS_MICRO_DELAY_MIN_MS: z.coerce.number().default(120),
-  GDMS_MICRO_DELAY_MAX_MS: z.coerce.number().default(280),
-  /** Legacy fallback when humanDelay() is called without args. */
-  GDMS_ACTION_DELAY_MIN_MS: z.coerce.number().default(500),
-  GDMS_ACTION_DELAY_MAX_MS: z.coerce.number().default(750),
-  /** Random interval between Search clicks while hunting for a matching enquiry. */
-  GDMS_SEARCH_INTERVAL_MIN_MS: z.coerce.number().default(20_000),
-  GDMS_SEARCH_INTERVAL_MAX_MS: z.coerce.number().default(45_000),
+  GDMS_SPEED_MULTIPLIER: z.coerce.number().min(0.2).max(1.5).default(0.35),
+  /** Enquiry transfer per-item pacing — lower = faster UI gaps (0.2–1.5). */
+  GDMS_ET_SPEED_MULTIPLIER: z.coerce.number().min(0.2).max(1.5).default(0.24),
+  /** Follow-up skip per-row pacing (~30s–1m target). */
+  GDMS_FUS_SPEED_MULTIPLIER: z.coerce.number().min(0.2).max(1.5).default(0.28),
+  /** Short hover / micro-pauses between clicks. */
+  GDMS_MICRO_DELAY_MIN_MS: z.coerce.number().default(40),
+  GDMS_MICRO_DELAY_MAX_MS: z.coerce.number().default(90),
+  /** Fallback when humanDelay() is called without args. */
+  GDMS_ACTION_DELAY_MIN_MS: z.coerce.number().default(180),
+  GDMS_ACTION_DELAY_MAX_MS: z.coerce.number().default(320),
+  /** Wait after PIN popup Search before selecting a row (ET). */
+  GDMS_PIN_SEARCH_DELAY_MIN_MS: z.coerce.number().default(600),
+  GDMS_PIN_SEARCH_DELAY_MAX_MS: z.coerce.number().default(1200),
+  /** Pause before Follow Up Save click (ET + FUS). */
+  GDMS_FOLLOW_UP_SAVE_DELAY_MIN_MS: z.coerce.number().default(180),
+  GDMS_FOLLOW_UP_SAVE_DELAY_MAX_MS: z.coerce.number().default(450),
+  /** Random interval between Search clicks while hunting for a matching enquiry (ET idle poll). */
+  GDMS_SEARCH_INTERVAL_MIN_MS: z.coerce.number().default(6_000),
+  GDMS_SEARCH_INTERVAL_MAX_MS: z.coerce.number().default(12_000),
   /** Max time to keep searching before failing the run (0 = infinite until Stop). */
   GDMS_ENQUIRY_SEARCH_TIMEOUT_MS: z.coerce.number().default(0),
   /** Retries for Save until success toast appears. */
-  GDMS_SAVE_RETRY_INTERVAL_MS: z.coerce.number().default(4000),
+  GDMS_SAVE_RETRY_INTERVAL_MS: z.coerce.number().default(1200),
   GDMS_SAVE_MAX_ATTEMPTS: z.coerce.number().default(10),
+  AI_SERVICE_URL: z.string().url().default("http://localhost:4200"),
+  AI_INTERNAL_SECRET: z.string().min(16).default("dev-ai-secret-change-me"),
   /** Keep Playwright open after failure (default: same as PLAYWRIGHT_HEADED). */
   GDMS_KEEP_BROWSER_ON_FAILURE: z
     .string()

@@ -2,46 +2,49 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CalendarClock, XCircle, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusBanner } from "@/components/ui/status-banner";
-import { LiveSessionLogPanel } from "@/components/live-session-log-panel";
-import { OtpEntryPanel } from "@/components/otp-entry-panel";
-import { RunStatusBadge } from "@/components/run-status-badge";
-import { LiveSessionActions } from "@/components/live-session-actions";
-import { NativeSelect } from "@/components/ui/native-select";
-import { cn } from "@/lib/utils";
+import { SettingsTabs } from "@/components/settings-tabs";
+import {
+  LiveSessionTabPanel,
+  type WorkflowRunRow,
+} from "@/components/live-session-tab-panel";
 import { apiFetch } from "@/lib/api";
 import { toUserMessage } from "@/lib/user-messages";
 import { useAuthStore } from "@/stores/auth-store";
 import {
-  linkLiveSessionToInFlightRun,
   resumeSavedAutomationSession,
 } from "@/lib/saved-automation-session";
 import { reconcileLiveRunForCurrentUser } from "@/lib/run-ownership";
 import {
   isTerminalRunStatus,
-  terminateLiveSessionLocally,
 } from "@/lib/terminate-live-session";
 import { useAutomationSessionStore } from "@/stores/automation-session-store";
 import { useLiveStore } from "@/stores/live-store";
 
-function friendlyRunError(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  return toUserMessage(raw, "generic");
-}
+type LiveSessionTabId = "1" | "2" | "3";
+type TabOperation = "enquiry_transfer" | "follow_up_skip" | "lost_inquiry";
 
-type WorkflowRunRow = {
-  id: string;
-  status: string;
-  currentStep: string | null;
-  errorMessage: string | null;
-  startedAt: string;
-  endedAt: string | null;
-  runParams?: { operation?: string } | null;
-  liveLogs?: { level: string; message: string; ts: string }[];
+const LIVE_SESSION_TABS: {
+  id: LiveSessionTabId;
+  label: string;
+  operation: TabOperation;
+  workspace: 1 | 2 | 3;
+  icon: typeof Zap;
+  accent: "primary" | "success" | "warning";
+}[] = [
+  { id: "1", label: "Enquiry Transfer", operation: "enquiry_transfer", workspace: 1, icon: Zap, accent: "primary" },
+  { id: "2", label: "Follow Up Skip", operation: "follow_up_skip", workspace: 2, icon: CalendarClock, accent: "success" },
+  { id: "3", label: "Lost Inquiry", operation: "lost_inquiry", workspace: 3, icon: XCircle, accent: "warning" },
+];
+
+type InFlightTabsResponse = {
+  enquiry_transfer: WorkflowRunRow | null;
+  follow_up_skip: WorkflowRunRow | null;
+  lost_inquiry: WorkflowRunRow | null;
 };
 
 type GdmsVncWorkspaceView = {
@@ -53,27 +56,26 @@ type GdmsVncWorkspaceView = {
 
 export default function LiveSessionPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const token = useAuthStore((s) => s.accessToken);
   const userId = useAuthStore((s) => s.user?.id);
-  const runId = useLiveStore((s) => s.runId);
-  const lastStep = useLiveStore((s) => s.lastStep);
-  const logs = useLiveStore((s) => s.logs);
   const realtimeConnected = useLiveStore((s) => s.realtimeConnected);
-  const workflowDone = useLiveStore((s) => s.workflowDone);
 
-  const [runRow, setRunRow] = useState<WorkflowRunRow | null>(null);
-  const [logoutMessage, setLogoutMessage] = useState<string | null>(null);
-  const [sessionActive, setSessionActive] = useState(false);
-  const [retrying, setRetrying] = useState(false);
-  const [requeuing, setRequeuing] = useState(false);
-  const [pendingSince, setPendingSince] = useState<number | null>(null);
-  const [vncWorkspaces, setVncWorkspaces] = useState<GdmsVncWorkspaceView[]>([]);
-  const [previewWorkspace, setPreviewWorkspace] = useState<1 | 2>(1);
-  const [controlBusy, setControlBusy] = useState<"pause" | "resume" | "stop" | null>(null);
-  const [controlNotice, setControlNotice] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<LiveSessionTabId>("1");
+  const [tabRuns, setTabRuns] = useState<InFlightTabsResponse>({
+    enquiry_transfer: null,
+    follow_up_skip: null,
+    lost_inquiry: null,
+  });
+  const [sessionActiveByRunId, setSessionActiveByRunId] = useState<Record<string, boolean>>({});
+  const [vncUrlByWorkspace, setVncUrlByWorkspace] = useState<Record<1 | 2 | 3, string | null>>({
+    1: null,
+    2: null,
+    3: null,
+  });
   const [endedRun, setEndedRun] = useState<WorkflowRunRow | null>(null);
   const [resuming, setResuming] = useState(false);
-  const [vncFrameKey, setVncFrameKey] = useState(0);
+  const [controlNotice, setControlNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) router.replace("/login");
@@ -84,8 +86,139 @@ export default function LiveSessionPage() {
     void reconcileLiveRunForCurrentUser(token);
   }, [token]);
 
+  /** Open correct tab when arriving from a notification (?runId=). */
   useEffect(() => {
-    if (!token || !userId || runId) {
+    const runId = searchParams.get("runId");
+    if (!runId || !token) return;
+    void apiFetch<WorkflowRunRow>(`/v1/workflow-runs/${runId}`, { token })
+      .then((run) => {
+        const op = run.runParams?.operation;
+        const tab = LIVE_SESSION_TABS.find((t) => t.operation === op);
+        if (tab) setActiveTab(tab.id);
+        if (run.liveLogs?.length) useLiveStore.getState().mergeLogsFromPoll(run.liveLogs, run.id);
+      })
+      .catch(() => undefined);
+  }, [searchParams, token]);
+
+  /** Poll one in-flight run per operation for multi-tab Live session. */
+  useEffect(() => {
+    if (!token) return;
+    let stop = false;
+
+    const poll = (): void => {
+      void apiFetch<InFlightTabsResponse>("/v1/workflow-runs/in-flight-tabs", { token })
+        .then(async (tabs) => {
+          if (stop) return;
+
+          const next: InFlightTabsResponse = {
+            enquiry_transfer: tabs?.enquiry_transfer ?? null,
+            follow_up_skip: tabs?.follow_up_skip ?? null,
+            lost_inquiry: tabs?.lost_inquiry ?? null,
+          };
+          for (const op of ["enquiry_transfer", "follow_up_skip", "lost_inquiry"] as const) {
+            const summary = next[op];
+            if (!summary?.id) {
+              next[op] = null;
+              continue;
+            }
+            try {
+              const full = await apiFetch<WorkflowRunRow>(`/v1/workflow-runs/${summary.id}`, { token });
+              if (isTerminalRunStatus(full.status)) {
+                next[op] = null;
+                continue;
+              }
+              next[op] = full;
+              if (full.liveLogs?.length) {
+                useLiveStore.getState().mergeLogsFromPoll(full.liveLogs, full.id);
+              }
+              if (full.status === "PAUSED_OTP") {
+                useLiveStore.getState().openOtp(full.id);
+              }
+            } catch {
+              next[op] = summary;
+            }
+          }
+
+          setTabRuns(next);
+
+          const runIds = LIVE_SESSION_TABS.map((t) => next[t.operation]?.id).filter(Boolean) as string[];
+          useLiveStore.getState().setWatchedRunIds(runIds);
+
+          const sessionChecks = await Promise.all(
+            runIds.map(async (id) => {
+              try {
+                const r = await apiFetch<{ active: boolean; watchdog?: boolean }>(
+                  `/v1/workflow-runs/${id}/session-active`,
+                  { token },
+                );
+                return [id, Boolean(r.active || r.watchdog)] as const;
+              } catch {
+                return [id, false] as const;
+              }
+            }),
+          );
+          if (!stop) {
+            setSessionActiveByRunId(Object.fromEntries(sessionChecks));
+          }
+
+          const vncFetches = await Promise.all(
+            LIVE_SESSION_TABS.map(async (tab) => {
+              const run = next[tab.operation];
+              if (!run?.id) return [tab.workspace, null] as const;
+              const sessionOn = sessionChecks.find(([id]) => id === run.id)?.[1] ?? false;
+              const status = run.status;
+              const needsVnc =
+                sessionOn ||
+                status === "RUNNING" ||
+                status === "PAUSED_OTP" ||
+                status === "PAUSED_USER";
+              if (!needsVnc) return [tab.workspace, null] as const;
+              try {
+                const q = new URLSearchParams({ runId: run.id, workspace: String(tab.workspace) });
+                const r = await apiFetch<{ enabled: boolean; workspaces?: GdmsVncWorkspaceView[] }>(
+                  `/v1/gdms-browser-view?${q.toString()}`,
+                  { token },
+                );
+                const url =
+                  r.enabled && r.workspaces?.length
+                    ? (r.workspaces.find((w) => w.id === tab.workspace)?.url ??
+                      r.workspaces[0]?.url ??
+                      null)
+                    : null;
+                return [tab.workspace, url] as const;
+              } catch {
+                return [tab.workspace, null] as const;
+              }
+            }),
+          );
+          if (!stop) {
+            setVncUrlByWorkspace({
+              1: vncFetches.find(([w]) => w === 1)?.[1] ?? null,
+              2: vncFetches.find(([w]) => w === 2)?.[1] ?? null,
+              3: vncFetches.find(([w]) => w === 3)?.[1] ?? null,
+            });
+          }
+        })
+        .catch(() => {
+          /* keep last state on transient failures */
+        });
+    };
+
+    poll();
+    const t = window.setInterval(poll, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !userId) {
+      setEndedRun(null);
+      return;
+    }
+    const anyInFlight = LIVE_SESSION_TABS.some((t) => tabRuns[t.operation]?.id);
+    if (anyInFlight) {
       setEndedRun(null);
       return;
     }
@@ -98,238 +231,13 @@ export default function LiveSessionPage() {
       .then((r) => {
         if (isTerminalRunStatus(r.status) || r.status === "FAILED") {
           setEndedRun(r);
-          if (r.liveLogs?.length) useLiveStore.getState().mergeLogsFromPoll(r.liveLogs);
+          if (r.liveLogs?.length) useLiveStore.getState().mergeLogsFromPoll(r.liveLogs, r.id);
         } else {
           setEndedRun(null);
         }
       })
       .catch(() => setEndedRun(null));
-  }, [token, userId, runId]);
-
-  useEffect(() => {
-    if (!token || !runId) {
-      setVncWorkspaces([]);
-      return;
-    }
-    const q = new URLSearchParams({ runId });
-    if (previewWorkspace === 2) q.set("workspace", "2");
-    else q.set("workspace", "1");
-    void apiFetch<{ enabled: boolean; workspaces?: GdmsVncWorkspaceView[]; url?: string }>(
-      `/v1/gdms-browser-view?${q.toString()}`,
-      { token },
-    )
-      .then((r) => setVncWorkspaces(r.enabled && r.workspaces?.length ? r.workspaces : []))
-      .catch(() => setVncWorkspaces([]));
-  }, [token, runId, previewWorkspace]);
-
-  const activeRunOperation = runRow?.runParams?.operation ?? runRow?.currentStep ?? "";
-  const isFollowUpSkipRun = activeRunOperation === "follow_up_skip";
-
-  useEffect(() => {
-    if (activeRunOperation === "follow_up_skip") setPreviewWorkspace(2);
-    else if (activeRunOperation === "enquiry_transfer") setPreviewWorkspace(1);
-  }, [activeRunOperation, runId]);
-
-  const gdmsBrowserUrl =
-    vncWorkspaces.find((w) => w.id === previewWorkspace)?.url ??
-    vncWorkspaces[0]?.url ??
-    null;
-
-  const sessionHydrated = useAutomationSessionStore.persist?.hasHydrated?.() ?? true;
-
-  useEffect(() => {
-    if (!sessionHydrated || !token || !userId) return;
-
-    const linkRun = (): void => {
-      if (useLiveStore.getState().runId) return;
-      void linkLiveSessionToInFlightRun(token, userId).catch(() => {});
-    };
-
-    linkRun();
-    const t = window.setInterval(linkRun, 4000);
-    return () => window.clearInterval(t);
-  }, [sessionHydrated, userId, token]);
-
-  useEffect(() => {
-    if (runRow?.status === "PAUSED_OTP" && runId) {
-      useLiveStore.getState().openOtp(runId);
-    }
-  }, [runRow?.status, runId, runRow?.currentStep]);
-
-  const otpPending = useLiveStore((s) => s.otpPending);
-  useEffect(() => {
-    if ((runRow?.status === "PAUSED_OTP" || otpPending) && runId) {
-      useLiveStore.getState().openOtp(runId);
-    }
-  }, [runRow?.status, otpPending, runId]);
-
-  useEffect(() => {
-    if (!token || !runId) {
-      setRunRow(null);
-      return;
-    }
-    let stop = false;
-    const poll = (): void => {
-      void apiFetch<WorkflowRunRow>(`/v1/workflow-runs/${runId}`, { token })
-        .then((r) => {
-          if (!stop) {
-            if (isTerminalRunStatus(r.status)) {
-              terminateLiveSessionLocally(userId);
-              setRunRow(null);
-              setPendingSince(null);
-              return;
-            }
-            setRunRow(r);
-            if (r.liveLogs?.length) {
-              useLiveStore.getState().mergeLogsFromPoll(r.liveLogs);
-            }
-            if (r.status === "PENDING") {
-              setPendingSince((prev) => prev ?? Date.parse(r.startedAt));
-            } else {
-              setPendingSince(null);
-            }
-          }
-        })
-        .catch(() => {
-          if (!stop) setRunRow(null);
-        });
-    };
-    poll();
-    const t = window.setInterval(poll, 3000);
-    return () => {
-      stop = true;
-      window.clearInterval(t);
-    };
-  }, [token, runId, userId]);
-
-  useEffect(() => {
-    if (!token || !runId) {
-      setSessionActive(false);
-      return;
-    }
-    let stop = false;
-    const poll = (): void => {
-      void apiFetch<{ active: boolean; watchdog?: boolean }>(
-        `/v1/workflow-runs/${runId}/session-active`,
-        { token },
-      )
-        .then((r) => {
-          if (!stop) setSessionActive(Boolean(r.active || r.watchdog));
-        })
-        .catch(() => {
-          /* keep last value on transient poll failures */
-        });
-    };
-    poll();
-    const t = window.setInterval(poll, 3000);
-    return () => {
-      stop = true;
-      window.clearInterval(t);
-    };
-  }, [token, runId]);
-
-  async function control(action: "pause" | "resume" | "stop"): Promise<void> {
-    if (!token || !runId || controlBusy) return;
-    if (action === "stop" && !window.confirm("Stop this automation run? The browser session will end.")) {
-      return;
-    }
-    setControlBusy(action);
-    setControlNotice(null);
-    try {
-      const res = await apiFetch<{ ok: boolean; status?: string }>(
-        `/v1/workflow-runs/${runId}/control`,
-        {
-          method: "POST",
-          token,
-          body: JSON.stringify({ action }),
-        },
-      );
-      const label =
-        action === "pause" ? "Paused." : action === "resume" ? "Resumed." : "Stopped.";
-      setControlNotice(label);
-      useLiveStore.getState().pushLog({
-        level: "info",
-        message: label,
-        ts: new Date().toISOString(),
-      });
-      if (action === "stop") {
-        terminateLiveSessionLocally(userId);
-        setRunRow(null);
-        setSessionActive(false);
-        setPendingSince(null);
-      } else {
-        const fresh = await apiFetch<WorkflowRunRow>(`/v1/workflow-runs/${runId}`, { token });
-        setRunRow(fresh);
-        if (res.status && res.status !== fresh.status) {
-          setRunRow({ ...fresh, status: res.status });
-        }
-      }
-    } catch (e) {
-      const msg = toUserMessage(e, "generic");
-      setControlNotice(`Could not ${action}: ${msg}`);
-      useLiveStore.getState().pushLog({
-        level: "warn",
-        message: `Could not ${action}: ${msg}`,
-        ts: new Date().toISOString(),
-      });
-    } finally {
-      setControlBusy(null);
-    }
-  }
-
-  async function requeueRun(): Promise<void> {
-    if (!token || !runId || requeuing) return;
-    setRequeuing(true);
-    try {
-      await apiFetch(`/v1/workflow-runs/${runId}/requeue`, {
-        method: "POST",
-        token,
-        body: JSON.stringify({}),
-      });
-      useLiveStore.getState().pushLog({
-        level: "info",
-        message: "Run queued again.",
-        ts: new Date().toISOString(),
-      });
-    } catch (e) {
-      useLiveStore.getState().pushLog({
-        level: "warn",
-        message: toUserMessage(e, "generic"),
-        ts: new Date().toISOString(),
-      });
-    } finally {
-      setRequeuing(false);
-    }
-  }
-
-  async function retryTransfer(): Promise<void> {
-    if (!token || !runId || retrying) return;
-    setRetrying(true);
-    try {
-      const endpoint = sessionActive
-        ? `/v1/workflow-runs/${runId}/retry-transfer`
-        : `/v1/workflow-runs/${runId}/resume-session`;
-      await apiFetch(endpoint, {
-        method: "POST",
-        token,
-        body: JSON.stringify({}),
-      });
-      useLiveStore.getState().pushLog({
-        level: "info",
-        message: sessionActive ? "Continuing enquiry transfer." : "Resuming saved session.",
-        ts: new Date().toISOString(),
-      });
-    } catch (e) {
-      const msg = toUserMessage(e, "generic");
-      useLiveStore.getState().pushLog({
-        level: "warn",
-        message: msg,
-        ts: new Date().toISOString(),
-      });
-    } finally {
-      setRetrying(false);
-    }
-  }
+  }, [token, userId, tabRuns]);
 
   async function resumeFromSaved(): Promise<void> {
     if (!token || !userId || resuming) return;
@@ -348,157 +256,29 @@ export default function LiveSessionPage() {
     }
   }
 
-  async function gdmsLogout(): Promise<void> {
-    if (!token || !runId) return;
-    setLogoutMessage(null);
-    try {
-      await apiFetch(`/v1/workflow-runs/${runId}/gdms-logout`, {
-        method: "POST",
-        token,
-        body: JSON.stringify({}),
-      });
-      const okMsg = "GDMS sign-out requested.";
-      setLogoutMessage(null);
-      useLiveStore.getState().pushLog({
-        level: "info",
-        message: okMsg,
-        ts: new Date().toISOString(),
-      });
-    } catch (e) {
-      const msg = toUserMessage(e, "generic");
-      setLogoutMessage(msg);
-      useLiveStore.getState().pushLog({
-        level: "warn",
-        message: msg,
-        ts: new Date().toISOString(),
-      });
-    }
+  function handleRunEnded(operation: TabOperation): void {
+    setTabRuns((prev) => ({ ...prev, [operation]: null }));
   }
 
   if (!token) return null;
 
-  const runFailed = runRow?.status === "FAILED";
-  const runPausedUser = runRow?.status === "PAUSED_USER";
-  const runIsActive = runRow?.status === "RUNNING" || runRow?.status === "PAUSED_OTP";
-  const runStopped = runRow?.status === "STOPPED";
-  const friendlyError = friendlyRunError(runRow?.errorMessage);
-  const previewHint = !runId
-    ? "No active run."
-    : !realtimeConnected
-      ? "Connecting…"
-      : runStopped
-        ? "Remote view ended."
-        : runFailed || runPausedUser
-          ? friendlyError ?? "Needs attention."
-          : runRow?.status === "RUNNING"
-            ? gdmsBrowserUrl
-              ? "Live noVNC view."
-              : "Starting remote view…"
-            : runRow?.status === "PENDING"
-              ? "Queued…"
-              : gdmsBrowserUrl
-                ? "noVNC ready."
-                : "Waiting for noVNC…";
-
-  const showPostLogin = workflowDone || runRow?.status === "COMPLETED";
-  const canContinueWhileRunning =
-    runRow?.status === "RUNNING" &&
-    (lastStep?.includes("Wait for GDMS dashboard") ||
-      logs.some((l) => /still waiting for dashboard/i.test(l.message)));
-  const pendingAgeMs =
-    runRow?.status === "PENDING" && pendingSince != null ? Date.now() - pendingSince : 0;
-  const runAgeMs = runRow?.startedAt ? Date.now() - Date.parse(runRow.startedAt) : 0;
-  const showRequeue =
-    !!runId && runRow?.status === "PENDING" && pendingAgeMs > 20_000 && !requeuing;
-  const recentLogActivity =
-    logs.length > 0 &&
-    Date.now() - Date.parse(logs[logs.length - 1]!.ts) < 45_000;
-  const runLostBrowser =
-    !!runId &&
-    runRow?.status === "RUNNING" &&
-    !sessionActive &&
-    !recentLogActivity &&
-    !realtimeConnected &&
-    runAgeMs > 15_000;
-  const canRetryTransfer =
-    !!runId &&
-    !retrying &&
-    (runFailed ||
-      runPausedUser ||
-      canContinueWhileRunning ||
-      runLostBrowser ||
-      (sessionActive && runRow?.status === "RUNNING"));
-  const retryButtonLabel = !sessionActive
-    ? "Resume saved session"
-    : runRow?.status === "RUNNING"
-      ? isFollowUpSkipRun
-        ? "Continue follow-up skip"
-        : "Continue transfer"
-      : isFollowUpSkipRun
-        ? "Retry follow-up skip"
-        : "Retry transfer";
-  const runStatus = runRow?.status;
-  const canPause = !!runId && (runStatus === "RUNNING" || runStatus === "PAUSED_OTP");
-  const canResume = !!runId && (runStatus === "PAUSED_USER" || runStatus === "FAILED");
-  const canStop =
-    !!runId &&
-    (runStatus === "PENDING" ||
-      runStatus === "RUNNING" ||
-      runStatus === "PAUSED_OTP" ||
-      runStatus === "PAUSED_USER" ||
-      runStatus === "FAILED");
-  const pauseDisabledReason =
-    runStatus === "PENDING"
-      ? "Still queued — use Stop to cancel or wait a few seconds"
-      : !canPause
-        ? "Only available while automation is running"
-        : undefined;
-  const resumeDisabledReason = !canResume ? "Available when the run is paused or failed" : undefined;
-  const stopDisabledReason = !canStop ? "No active run to stop" : undefined;
-  const canGdmsLogout = !!runId && sessionActive;
-  const controlBtnDisabledClass =
-    "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-35 disabled:grayscale disabled:hover:bg-inherit disabled:hover:text-inherit";
+  const anyActiveRun = LIVE_SESSION_TABS.some((t) => tabRuns[t.operation]?.id);
 
   return (
     <>
-      {!runId && endedRun ? (
+      {!anyActiveRun && endedRun ? (
         <StatusBanner variant="warning" title="Previous automation ended">
-          <p className="font-mono text-xs opacity-90">{endedRun.status} · {endedRun.id}</p>
+          <p className="font-mono text-xs opacity-90">
+            {endedRun.status} · {endedRun.id}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" disabled={resuming} onClick={() => void resumeFromSaved()}>
               {resuming ? "Starting…" : "Resume automation"}
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <Link href="/dashboard">Start fresh on Dashboard</Link>
+              <Link href="/operations">Start fresh on Operations</Link>
             </Button>
           </div>
-        </StatusBanner>
-      ) : null}
-
-      {showPostLogin && (
-        <div className="panel-success">
-          <p className="font-medium">GDMS ready</p>
-        </div>
-      )}
-
-      {(runRow?.status === "PAUSED_OTP" || otpPending) && (
-        <OtpEntryPanel variant="card" className="mb-2" />
-      )}
-
-      {logoutMessage && (
-        <StatusBanner variant="error" title="Could not sign out of GDMS">
-          {logoutMessage}
-        </StatusBanner>
-      )}
-
-      {runRow?.status === "PENDING" && pendingAgeMs > 20_000 ? (
-        <StatusBanner variant="warning" title="Still queued" />
-      ) : null}
-
-      {runLostBrowser ? (
-        <StatusBanner variant="warning" title="Browser session lost">
-          The remote GDMS browser is not connected (often after a server restart). Press{" "}
-          <strong>{retryButtonLabel}</strong> below, or Stop and start again from Dashboard.
         </StatusBanner>
       ) : null}
 
@@ -508,196 +288,46 @@ export default function LiveSessionPage() {
         </div>
       ) : null}
 
-      {friendlyError && runIsActive && sessionActive ? (
-        <StatusBanner variant="warning" title="Notice">
-          {friendlyError}
-        </StatusBanner>
-      ) : null}
-
-      {(runFailed || runPausedUser) && friendlyError && !runIsActive && (
-        <StatusBanner
-          variant="error"
-          title={runPausedUser ? "Paused" : "Failed"}
-        >
-          {friendlyError}
-        </StatusBanner>
-      )}
-
       <PageHeader
         title="Live session"
-        eyebrow={runId ?? "Monitoring"}
+        eyebrow={anyActiveRun ? "Monitoring" : "Idle"}
         actions={
-          <LiveSessionActions>
-            <RunStatusBadge status={runRow?.status} />
-          {gdmsBrowserUrl &&
-          (sessionActive ||
-            runRow?.status === "RUNNING" ||
-            runRow?.status === "PAUSED_OTP") ? (
-            <Button
-              size="sm"
-              variant="default"
-              className="hidden bg-primary hover:bg-primary/90 md:inline-flex"
-              onClick={() => {
-                window.open(
-                  gdmsBrowserUrl,
-                  `gdms-browser-ws${previewWorkspace}`,
-                  "width=1600,height=900,menubar=no,toolbar=no",
-                );
-              }}
-            >
-              Open GDMS Chrome window
-            </Button>
-          ) : null}
-          {showRequeue ? (
-            <Button size="sm" variant="outline" onClick={() => void requeueRun()}>
-              {requeuing ? "Working…" : "Retry queue"}
-            </Button>
-          ) : null}
-          {canRetryTransfer ? (
-            <Button size="sm" onClick={() => void retryTransfer()}>
-              {retrying ? "Working…" : retryButtonLabel}
-            </Button>
-          ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            title={pauseDisabledReason}
-            className={cn(
-              controlBtnDisabledClass,
-              controlBusy === "pause" && "ring-2 ring-amber-400",
-              canPause && !controlBusy && "border-amber-300 hover:bg-amber-50",
-            )}
-            disabled={!canPause || !!controlBusy}
-            onClick={() => void control("pause")}
-          >
-            {controlBusy === "pause" ? "Pausing…" : "Pause"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            title={resumeDisabledReason}
-            className={cn(
-              controlBtnDisabledClass,
-              controlBusy === "resume" && "ring-2 ring-emerald-400",
-              canResume &&
-                !controlBusy &&
-                "border-emerald-300 hover:bg-emerald-50 dark:border-emerald-600 dark:hover:bg-emerald-950/40",
-            )}
-            disabled={!canResume || !!controlBusy}
-            onClick={() => void control("resume")}
-          >
-            {controlBusy === "resume" ? "Resuming…" : "Resume"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className={controlBtnDisabledClass}
-            disabled={!canGdmsLogout}
-            onClick={() => void gdmsLogout()}
-          >
-            Logout GDMS
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            title={stopDisabledReason}
-            className={cn(
-              controlBtnDisabledClass,
-              controlBusy === "stop" && "ring-2 ring-red-400",
-              canStop &&
-                !controlBusy &&
-                "border-red-300 text-red-900 hover:bg-red-50 dark:border-red-600 dark:text-red-200 dark:hover:bg-red-950/40",
-            )}
-            disabled={!canStop || !!controlBusy}
-            onClick={() => void control("stop")}
-          >
-            {controlBusy === "stop" ? "Stopping…" : "Stop"}
-          </Button>
-          </LiveSessionActions>
+          <SettingsTabs
+            variant="premium"
+            align="end"
+            tabs={LIVE_SESSION_TABS.map(({ id, label, icon, accent }) => ({
+              id,
+              label,
+              icon,
+              accent,
+            }))}
+            active={activeTab}
+            onChange={(id) => setActiveTab(id as LiveSessionTabId)}
+          />
         }
       />
 
-      {runRow?.currentStep ? (
-        <div className="rounded-xl border border-border/80 bg-card px-4 py-3 shadow-card">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            <span className="font-medium text-foreground">Current step</span>
-            <span className="font-mono text-xs text-muted-foreground">{runRow.currentStep}</span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-all duration-500"
-              style={{
-                width: runRow.status === "COMPLETED" ? "100%" : runRow.status === "RUNNING" ? "55%" : "25%",
-              }}
-            />
-          </div>
-        </div>
-      ) : null}
-
-      <div className="grid gap-6 lg:grid-cols-3 lg:gap-8">
-        <Card className="lg:col-span-2">
-          <CardHeader className="space-y-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <CardTitle>noVNC workspace</CardTitle>
-              </div>
-              {vncWorkspaces.length > 0 ? (
-                <div className="flex shrink-0 flex-col gap-1">
-                  <label htmlFor="preview-workspace" className="text-xs font-medium text-muted-foreground">
-                    noVNC workspace
-                  </label>
-                  <NativeSelect
-                    id="preview-workspace"
-                    value={previewWorkspace}
-                    onChange={(e) => setPreviewWorkspace(Number(e.target.value) as 1 | 2)}
-                  >
-                    {vncWorkspaces.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        Workspace {w.id} — {w.label}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </div>
-              ) : null}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {gdmsBrowserUrl && vncWorkspaces.length > 0 ? (
-              <>
-                <iframe
-                  key={vncFrameKey}
-                  title={`GDMS noVNC workspace ${previewWorkspace}`}
-                  src={gdmsBrowserUrl}
-                  className="aspect-video w-full max-h-[80vh] rounded border border-border bg-black"
-                  allow="clipboard-read; clipboard-write"
-                />
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setVncFrameKey((k) => k + 1)}
-                  >
-                    Reconnect noVNC
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <div className="flex h-64 flex-col items-center justify-center gap-2 rounded bg-muted px-4 text-center text-sm text-muted-foreground">
-                <p>{previewHint}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <LiveSessionLogPanel
-          logs={runId || endedRun ? logs : []}
-          runStatus={runRow?.status}
-          prominentError={
-            runFailed || runPausedUser ? friendlyError ?? runRow?.errorMessage ?? null : null
-          }
-          onClearLogs={() => useLiveStore.getState().clearLogs()}
-        />
-      </div>
+      {LIVE_SESSION_TABS.map((tab) =>
+        tab.id === activeTab ? (
+          <LiveSessionTabPanel
+            key={tab.id}
+            tabLabel={tab.label}
+            workspace={tab.workspace}
+            operation={tab.operation}
+            runRow={tabRuns[tab.operation]}
+            sessionActive={
+              tabRuns[tab.operation]?.id
+                ? Boolean(sessionActiveByRunId[tabRuns[tab.operation]!.id])
+                : false
+            }
+            vncUrl={vncUrlByWorkspace[tab.workspace]}
+            token={token}
+            userId={userId}
+            realtimeConnected={realtimeConnected}
+            onRunEnded={() => handleRunEnded(tab.operation)}
+          />
+        ) : null,
+      )}
     </>
   );
 }

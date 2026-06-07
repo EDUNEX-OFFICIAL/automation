@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import type { BrowserContext } from "playwright";
 import { chromium } from "playwright";
 import { gdmsBrowserHeadless, gdmsChromiumLaunchArgs } from "./browser-context.js";
+import { ensureXvfbDisplay, isMissingXServerError } from "./ensure-xvfb-display.js";
 import { env } from "./config.js";
 import { gdmsVncViewport } from "./gdms-vnc-display.js";
 
@@ -65,6 +66,7 @@ export async function launchGdmsPersistentContext(
     viewport: remoteView ? null : (opts?.viewport ?? gdmsVncViewport()),
   };
   if (opts?.display) {
+    await ensureXvfbDisplay(opts.display);
     launchOpts.env = {
       ...process.env,
       DISPLAY: opts.display,
@@ -78,6 +80,11 @@ export async function launchGdmsPersistentContext(
     return await attempt();
   } catch (e) {
     const raw = String(e);
+    if (isMissingXServerError(raw) && opts?.display) {
+      await ensureXvfbDisplay(opts.display);
+      await new Promise((r) => setTimeout(r, 500));
+      return await attempt();
+    }
     if (!isChromiumProfileLockError(raw)) throw e;
     killOrphanChromiumForProfile(sessionDir);
     clearStaleChromiumProfileLocks(sessionDir);

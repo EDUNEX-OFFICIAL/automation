@@ -1,12 +1,14 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  BarChart3,
   Building2,
   LayoutDashboard,
   Settings,
   User,
   UserCog,
   Users,
+  Zap,
 } from "lucide-react";
 
 export type AppRole =
@@ -54,6 +56,15 @@ export function canManageUsersPage(role: string | undefined): boolean {
   return role === "DEALER_ADMIN" || role === "TEAM_LEADER";
 }
 
+export function canViewAutomationStats(role: string | undefined): boolean {
+  return (
+    role === "SUPER_ADMIN" ||
+    role === "DEALER_ADMIN" ||
+    role === "TEAM_LEADER" ||
+    role === "SALES_CONSULTANT"
+  );
+}
+
 /** Follow Up Skip schedule on Settings — not available to Sales Consultant. */
 export function canEditScheduleSettings(role: string | undefined): boolean {
   return role === "TEAM_LEADER" || role === "DEALER_ADMIN";
@@ -70,6 +81,7 @@ export function navSectionsForRole(role: string | undefined): NavSection[] {
     case "SUPER_ADMIN":
       return [
         group("Platform", [
+          { href: "/platform/analytics", label: "Analytics", icon: BarChart3, section: "Administration" },
           { href: "/platform/dealers", label: "Dealers", icon: Building2, section: "Administration" },
         ]),
         group("Account", [
@@ -78,6 +90,9 @@ export function navSectionsForRole(role: string | undefined): NavSection[] {
       ];
     case "DEALER_ADMIN":
       return [
+        group("Overview", [
+          { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, section: "Operations" },
+        ]),
         group("Administration", [
           { href: "/users", label: "Team", icon: UserCog, section: "Administration" },
           { href: "/leads", label: "Leads", icon: Users, section: "Administration" },
@@ -91,6 +106,7 @@ export function navSectionsForRole(role: string | undefined): NavSection[] {
       return [
         group("Operations", [
           { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, section: "Operations" },
+          { href: "/operations", label: "Operations", icon: Zap, section: "Operations" },
           { href: "/live-session", label: "Live session", icon: Activity, section: "Operations" },
           { href: "/leads", label: "Leads", icon: Users, section: "Operations" },
         ]),
@@ -106,6 +122,7 @@ export function navSectionsForRole(role: string | undefined): NavSection[] {
       return [
         group("Operations", [
           { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, section: "Operations" },
+          { href: "/operations", label: "Operations", icon: Zap, section: "Operations" },
           { href: "/live-session", label: "Live session", icon: Activity, section: "Operations" },
           { href: "/leads", label: "Leads", icon: Users, section: "Operations" },
         ]),
@@ -126,7 +143,7 @@ export function homePathForRole(role: string | undefined): string {
     case "SUPER_ADMIN":
       return "/platform/dealers";
     case "DEALER_ADMIN":
-      return "/users";
+      return "/dashboard";
     case "TEAM_LEADER":
     case "SALES_CONSULTANT":
       return "/dashboard";

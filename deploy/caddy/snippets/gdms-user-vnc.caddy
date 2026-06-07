@@ -97,3 +97,53 @@ handle_path /gdms-browser-fup-u14/* {
 handle_path /gdms-browser-fup-u15/* {
 	reverse_proxy automation-playwright:6113
 }
+
+# Lost Inquiry — same websockify ports as FUP (separate path prefix / profile)
+handle_path /gdms-browser-lost-u0/* {
+	reverse_proxy automation-playwright:6098
+}
+handle_path /gdms-browser-lost-u1/* {
+	reverse_proxy automation-playwright:6099
+}
+handle_path /gdms-browser-lost-u2/* {
+	reverse_proxy automation-playwright:6100
+}
+handle_path /gdms-browser-lost-u3/* {
+	reverse_proxy automation-playwright:6101
+}
+handle_path /gdms-browser-lost-u4/* {
+	reverse_proxy automation-playwright:6102
+}
+handle_path /gdms-browser-lost-u5/* {
+	reverse_proxy automation-playwright:6103
+}
+handle_path /gdms-browser-lost-u6/* {
+	reverse_proxy automation-playwright:6104
+}
+handle_path /gdms-browser-lost-u7/* {
+	reverse_proxy automation-playwright:6105
+}
+handle_path /gdms-browser-lost-u8/* {
+	reverse_proxy automation-playwright:6106
+}
+handle_path /gdms-browser-lost-u9/* {
+	reverse_proxy automation-playwright:6107
+}
+handle_path /gdms-browser-lost-u10/* {
+	reverse_proxy automation-playwright:6108
+}
+handle_path /gdms-browser-lost-u11/* {
+	reverse_proxy automation-playwright:6109
+}
+handle_path /gdms-browser-lost-u12/* {
+	reverse_proxy automation-playwright:6110
+}
+handle_path /gdms-browser-lost-u13/* {
+	reverse_proxy automation-playwright:6111
+}
+handle_path /gdms-browser-lost-u14/* {
+	reverse_proxy automation-playwright:6112
+}
+handle_path /gdms-browser-lost-u15/* {
+	reverse_proxy automation-playwright:6113
+}

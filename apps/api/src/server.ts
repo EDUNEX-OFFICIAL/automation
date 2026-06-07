@@ -22,6 +22,7 @@ import { registerUserProfileRoutes } from "./routes/user-profile.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { startFollowUpSkipScheduler } from "./lib/follow-up-skip-scheduler.js";
+import { startLostInquiryScheduler } from "./lib/lost-inquiry-scheduler.js";
 import { startEnquiryTransferScheduler } from "./lib/enquiry-transfer-scheduler.js";
 
 async function main(): Promise<void> {
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
 
   await app.ready();
   startFollowUpSkipScheduler();
+  startLostInquiryScheduler();
   startEnquiryTransferScheduler();
   attachSocket(app.server);
 

@@ -62,6 +62,7 @@ if [ "$remote" = "1" ]; then
   mkdir -p /tmp/.vnc
   x11vnc -storepasswd "$vnc_pass" /tmp/.vnc/passwd >/dev/null
 
+  # Warm Xvfb + noVNC in background — Node must start immediately for /health and /internal/execute.
   (
     slot=0
     while [ "$slot" -lt "$user_slots" ]; do

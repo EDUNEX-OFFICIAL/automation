@@ -10,15 +10,27 @@ import { apiFetch, getApiUrl, getSocketIoSettings } from "@/lib/api";
 import type { WorkflowRunDetail } from "@/lib/saved-automation-session";
 import { useAutomationSessionStore } from "@/stores/automation-session-store";
 
-/** Ignore automation socket payloads unless they belong to the linked run. */
-function isActiveWorkflowRun(workflowRunId: string | undefined): boolean {
-  const active = useLiveStore.getState().runId;
-  return Boolean(active && workflowRunId && workflowRunId === active);
+/** Route socket payloads to the correct per-tab log buffer. */
+function shouldAcceptRunEvent(workflowRunId: string | undefined): boolean {
+  if (!workflowRunId) return false;
+  const { watchedRunIds, runId } = useLiveStore.getState();
+  const watched = watchedRunIds ?? [];
+  if (watched.length > 0) return watched.includes(workflowRunId);
+  return Boolean(runId && workflowRunId === runId);
+}
+
+function pushRunLog(
+  workflowRunId: string | undefined,
+  log: { level: string; message: string; ts: string },
+): void {
+  if (!shouldAcceptRunEvent(workflowRunId) || !workflowRunId) return;
+  useLiveStore.getState().pushLogForRun(workflowRunId, log);
 }
 
 export function useRealtimeSocket(): void {
   const token = useAuthStore((s) => s.accessToken);
   const runId = useLiveStore((s) => s.runId);
+  const watchedRunIds = useLiveStore((s) => s.watchedRunIds);
   const socketRef = useRef<Socket | null>(null);
   const lastSocketErrorLogAtRef = useRef(0);
   const inquiriesSuffixRef = useRef("");
@@ -102,21 +114,22 @@ export function useRealtimeSocket(): void {
       })();
     });
     socket.on(SocketEvents.STEP_COMPLETED, (p: { workflowRunId?: string; label: string }) => {
-      if (!isActiveWorkflowRun(p.workflowRunId)) return;
-      storeRef.current.setLastStep(p.label);
+      if (!shouldAcceptRunEvent(p.workflowRunId)) return;
+      if (useLiveStore.getState().runId === p.workflowRunId) {
+        storeRef.current.setLastStep(p.label);
+      }
     });
     socket.on(
       SocketEvents.SCREENSHOT_FRAME,
       (p: { workflowRunId?: string; imageBase64: string }) => {
-        if (!isActiveWorkflowRun(p.workflowRunId)) return;
+        if (useLiveStore.getState().runId !== p.workflowRunId) return;
         storeRef.current.setFrame(p.imageBase64);
       },
     );
     socket.on(
       SocketEvents.LOG_LINE,
       (p: { workflowRunId?: string; level: string; message: string; ts: string }) => {
-        if (!isActiveWorkflowRun(p.workflowRunId)) return;
-        storeRef.current.pushLog(p);
+        pushRunLog(p.workflowRunId, p);
         const m = p.message.toLowerCase();
         if (
           m.includes("gdms dashboard is ready") ||
@@ -129,9 +142,9 @@ export function useRealtimeSocket(): void {
       },
     );
     socket.on(SocketEvents.WORKFLOW_FAILED, (p: { workflowRunId?: string; error?: string }) => {
-      if (!isActiveWorkflowRun(p.workflowRunId)) return;
+      if (!shouldAcceptRunEvent(p.workflowRunId)) return;
       const msg = typeof p?.error === "string" ? p.error : JSON.stringify(p);
-      storeRef.current.pushLog({
+      pushRunLog(p.workflowRunId, {
         level: "error",
         message: `Workflow failed: ${msg}`,
         ts: new Date().toISOString(),
@@ -140,12 +153,12 @@ export function useRealtimeSocket(): void {
     socket.on(
       SocketEvents.WORKFLOW_PAUSED_USER,
       (p: { workflowRunId?: string; message?: string }) => {
-        if (!isActiveWorkflowRun(p.workflowRunId)) return;
+        if (!shouldAcceptRunEvent(p.workflowRunId)) return;
         const msg =
           typeof p?.message === "string" && p.message.trim()
             ? p.message
             : "Automation paused — fix CRM in the visible browser, then use Retry transfer.";
-        storeRef.current.pushLog({
+        pushRunLog(p.workflowRunId, {
           level: "warn",
           message: `Paused for manual intervention: ${msg}`,
           ts: new Date().toISOString(),
@@ -155,11 +168,11 @@ export function useRealtimeSocket(): void {
     socket.on(
       SocketEvents.CONTROL_ACK,
       (p: { workflowRunId?: string; action?: string; ok?: boolean }) => {
-        if (!isActiveWorkflowRun(p?.workflowRunId)) return;
+        if (!shouldAcceptRunEvent(p?.workflowRunId)) return;
         if (p?.ok && p.action) {
           const actionLabel =
             p.action === "pause" ? "Pause" : p.action === "resume" ? "Resume" : "Stop";
-          storeRef.current.pushLog({
+          pushRunLog(p.workflowRunId, {
             level: "info",
             message: `${actionLabel} confirmed by server.`,
             ts: new Date().toISOString(),
@@ -168,29 +181,28 @@ export function useRealtimeSocket(): void {
       },
     );
     socket.on(SocketEvents.WORKFLOW_COMPLETED, (p: { workflowRunId?: string }) => {
-      if (isActiveWorkflowRun(p.workflowRunId)) {
+      if (useLiveStore.getState().runId === p.workflowRunId) {
         storeRef.current.setWorkflowDone(true);
-        storeRef.current.pushLog({
-          level: "info",
-          message: "Workflow complete — the post-login GDMS screen should appear in the preview.",
-          ts: new Date().toISOString(),
-        });
       }
+      pushRunLog(p.workflowRunId, {
+        level: "info",
+        message: "Workflow complete — the post-login GDMS screen should appear in the preview.",
+        ts: new Date().toISOString(),
+      });
     });
     socket.on(
       SocketEvents.GDMS_SESSION_REDIRECTED,
       (p: { workflowRunId?: string; reason?: "timeout" | "logout" }) => {
-        if (isActiveWorkflowRun(p.workflowRunId)) {
-          const message =
-            p.reason === "logout"
-              ? "GDMS logout — login page should appear in the preview."
-              : "GDMS session timed out — login page opened in the preview.";
-          storeRef.current.pushLog({
-            level: "info",
-            message,
-            ts: new Date().toISOString(),
-          });
-        }
+        if (!shouldAcceptRunEvent(p.workflowRunId)) return;
+        const message =
+          p.reason === "logout"
+            ? "GDMS logout — login page should appear in the preview."
+            : "GDMS session timed out — login page opened in the preview.";
+        pushRunLog(p.workflowRunId, {
+          level: "info",
+          message,
+          ts: new Date().toISOString(),
+        });
       },
     );
     socket.on(SocketEvents.LEAD_CLASSIFIED, () => {
@@ -215,8 +227,10 @@ export function useRealtimeSocket(): void {
 
     socket.on("connect", () => {
       storeRef.current.setRealtimeConnected(true);
-      const id = useLiveStore.getState().runId;
-      if (id) socket.emit("join_run", id);
+      const ids = useLiveStore.getState().watchedRunIds ?? [];
+      const focus = useLiveStore.getState().runId;
+      const toJoin = ids.length > 0 ? ids : focus ? [focus] : [];
+      for (const id of toJoin) socket.emit("join_run", id);
     });
 
     socket.on("disconnect", () => {
@@ -248,6 +262,9 @@ export function useRealtimeSocket(): void {
 
   useEffect(() => {
     const s = socketRef.current;
-    if (s?.connected && runId) s.emit("join_run", runId);
-  }, [runId]);
+    if (!s?.connected) return;
+    const watched = watchedRunIds ?? [];
+    const ids = watched.length > 0 ? watched : runId ? [runId] : [];
+    for (const id of ids) s.emit("join_run", id);
+  }, [runId, watchedRunIds]);
 }

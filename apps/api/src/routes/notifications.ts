@@ -39,4 +39,17 @@ export async function registerNotificationRoutes(app: FastifyInstance): Promise<
     });
     return { ok: true };
   });
+
+  app.delete<{ Params: { id: string } }>(
+    "/v1/notifications/:id",
+    { preHandler: authPreHandler },
+    async (req, reply) => {
+      const row = await prisma.notification.findUnique({ where: { id: req.params.id } });
+      if (!row || row.userId !== req.user!.sub) {
+        return reply.code(404).send({ error: "Not found" });
+      }
+      await prisma.notification.delete({ where: { id: row.id } });
+      return { ok: true };
+    },
+  );
 }

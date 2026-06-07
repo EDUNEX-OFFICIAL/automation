@@ -9,7 +9,7 @@ import { retryEnquiryTransfer } from "./retry-enquiry-transfer.js";
 import { retryFollowUpSkip } from "./retry-follow-up-skip.js";
 import { runWorkflow, type ExecutePayload } from "./runner.js";
 import type { WorkflowDefinition } from "@gdms/workflow-engine";
-import { ENABLED_AUTOMATION_OPERATIONS, AUTOMATION_SOURCES } from "@gdms/shared";
+import { ENABLED_AUTOMATION_OPERATIONS, AUTOMATION_SOURCES, operationNeedsSources } from "@gdms/shared";
 
 const workflowDefSchema = z.custom<WorkflowDefinition>();
 
@@ -33,7 +33,7 @@ const bodySchema = z.object({
   workflow: workflowDefSchema.optional(),
   kind: z.string().optional(),
 }).superRefine((data, ctx) => {
-  if (data.operation !== "follow_up_skip" && data.sources.length < 1) {
+  if (operationNeedsSources(data.operation) && data.sources.length < 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "At least one source is required",

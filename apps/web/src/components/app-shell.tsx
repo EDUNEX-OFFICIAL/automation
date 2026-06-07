@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { AppTopbar } from "@/components/layout/app-topbar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationBell } from "@/components/notification-bell";
 import { AppUserMenu } from "@/components/app-user-menu";
 import { OtpModal } from "@/components/otp-modal";
 import { RoleHomeRedirect } from "@/components/role-home-redirect";
@@ -57,6 +58,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {mobileTitle}
           </Link>
           <ThemeToggle />
+          <NotificationBell />
           <AppUserMenu />
         </header>
 

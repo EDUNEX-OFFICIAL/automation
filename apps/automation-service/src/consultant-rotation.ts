@@ -37,9 +37,22 @@ type TlRow = {
 };
 
 type ScLabelRow = {
+  id: string;
   displayName: string | null;
   username: string;
+  reportsToUserId: string | null;
 };
+
+function labelMatchesGdms(candidate: string, label: string): boolean {
+  const a = candidate.trim().toLowerCase();
+  const b = label.trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const aWords = a.split(/\s+/).slice(0, 2).join(" ");
+  const bWords = b.split(/\s+/).slice(0, 2).join(" ");
+  if (aWords && bWords && (a.includes(bWords) || b.includes(aWords))) return true;
+  return false;
+}
 
 /** Team Leader id for rotation: TL who started the run, or SC's reportsTo TL. */
 export async function resolveTeamLeaderUserId(
@@ -84,17 +97,61 @@ export async function loadTeamSalesConsultantLabels(
   prisma: PrismaClient,
   teamLeaderUserId: string,
 ): Promise<string[]> {
-  const scs = await prisma.$queryRaw<ScLabelRow[]>`
-    SELECT "displayName", username
+  const scs = await loadTeamSalesConsultants(prisma, teamLeaderUserId);
+  return scs
+    .map((u) => salesConsultantGdmsLabel(u))
+    .filter((label: string) => label.length > 0);
+}
+
+export async function loadTeamSalesConsultants(
+  prisma: PrismaClient,
+  teamLeaderUserId: string,
+): Promise<ScLabelRow[]> {
+  return prisma.$queryRaw<ScLabelRow[]>`
+    SELECT id, "displayName", username, "reportsToUserId"
     FROM "User"
     WHERE "reportsToUserId" = ${teamLeaderUserId}
       AND role = ${ROLE_SALES_CONSULTANT}::"UserRole"
       AND "isActive" = true
     ORDER BY "displayName" ASC NULLS LAST, username ASC
   `;
-  return scs
-    .map((u: ScLabelRow) => salesConsultantGdmsLabel(u))
-    .filter((label: string) => label.length > 0);
+}
+
+export async function loadDealerSalesConsultants(
+  prisma: PrismaClient,
+  dealerId: string,
+): Promise<ScLabelRow[]> {
+  return prisma.$queryRaw<ScLabelRow[]>`
+    SELECT id, "displayName", username, "reportsToUserId"
+    FROM "User"
+    WHERE "dealerId" = ${dealerId}
+      AND role = ${ROLE_SALES_CONSULTANT}::"UserRole"
+      AND "isActive" = true
+    ORDER BY "displayName" ASC NULLS LAST, username ASC
+  `;
+}
+
+/** Match GDMS SC label to User.id within team or whole dealer. */
+export async function resolveScUserIdFromLabel(
+  prisma: PrismaClient,
+  dealerId: string,
+  teamLeaderUserId: string | null,
+  label: string,
+): Promise<string | null> {
+  const trimmed = label.trim();
+  if (!trimmed) return null;
+
+  const pool = teamLeaderUserId
+    ? await loadTeamSalesConsultants(prisma, teamLeaderUserId)
+    : await loadDealerSalesConsultants(prisma, dealerId);
+
+  for (const sc of pool) {
+    if (labelMatchesGdms(salesConsultantGdmsLabel(sc), trimmed)) return sc.id;
+  }
+  for (const sc of pool) {
+    if (labelMatchesGdms(sc.username, trimmed)) return sc.id;
+  }
+  return null;
 }
 
 async function ensureRotationPool(

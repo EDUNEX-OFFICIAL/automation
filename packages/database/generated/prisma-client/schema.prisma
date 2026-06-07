@@ -55,21 +55,28 @@ enum AndroidDeviceStatus {
   BUSY
 }
 
+enum AutomationStatOperation {
+  enquiry_transfer
+  follow_up_skip
+  lost_inquiry
+}
+
 model Dealer {
-  id                  String                    @id @default(cuid())
-  name                String
-  isActive            Boolean                   @default(true)
-  maxTeamLeaders      Int                       @default(10)
-  maxSalesConsultants Int                       @default(50)
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
-  users               User[]
-  inquiries           Inquiry[]
-  workflows           DealerWorkflow[]
-  runs                WorkflowRun[]
-  devices             AndroidDevice[]
-  voiceProfiles       VoiceProfile[]
-  automationSettings  DealerAutomationSettings?
+  id                   String                    @id @default(cuid())
+  name                 String
+  isActive             Boolean                   @default(true)
+  maxTeamLeaders       Int                       @default(10)
+  maxSalesConsultants  Int                       @default(50)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  users                User[]
+  inquiries            Inquiry[]
+  workflows            DealerWorkflow[]
+  runs                 WorkflowRun[]
+  devices              AndroidDevice[]
+  voiceProfiles        VoiceProfile[]
+  automationSettings   DealerAutomationSettings?
+  automationStatEvents AutomationStatEvent[]
 }
 
 /**
@@ -105,6 +112,11 @@ model DealerAutomationSettings {
    */
   enquiryTransferEnabled   Boolean   @default(false)
   enquiryTransferStartTime String?
+  /**
+   * Weekly Lost Inquiry on Saturdays (IST HH:mm).
+   */
+  lostInquiryEnabled       Boolean   @default(false)
+  lostInquiryStartTime     String?
   /**
    * Last scheduled follow-up skip run id (for Settings UI).
    */
@@ -252,20 +264,45 @@ model InquiryLog {
 }
 
 model WorkflowRun {
-  id                String            @id @default(cuid())
-  dealerId          String
-  dealer            Dealer            @relation(fields: [dealerId], references: [id], onDelete: Cascade)
-  startedByUserId   String?
-  status            WorkflowRunStatus @default(PENDING)
-  currentStep       String?
-  runParams         Json?
-  browserSessionKey String?
-  errorMessage      String?
-  startedAt         DateTime          @default(now())
-  endedAt           DateTime?
-  aiCalls           AiCall[]
+  id                   String                @id @default(cuid())
+  dealerId             String
+  dealer               Dealer                @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  startedByUserId      String?
+  status               WorkflowRunStatus     @default(PENDING)
+  currentStep          String?
+  runParams            Json?
+  browserSessionKey    String?
+  errorMessage         String?
+  startedAt            DateTime              @default(now())
+  endedAt              DateTime?
+  aiCalls              AiCall[]
+  automationStatEvents AutomationStatEvent[]
 
   @@index([dealerId, startedAt])
+}
+
+/**
+ * Per-enquiry automation success events for dashboard KPIs.
+ */
+model AutomationStatEvent {
+  id                    String                  @id @default(cuid())
+  dealerId              String
+  dealer                Dealer                  @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  workflowRunId         String
+  workflowRun           WorkflowRun             @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  operation             AutomationStatOperation
+  startedByUserId       String
+  teamLeaderUserId      String?
+  salesConsultantUserId String?
+  salesConsultantLabel  String
+  occurredAt            DateTime                @default(now())
+
+  @@index([dealerId, occurredAt])
+  @@index([dealerId, operation, occurredAt])
+  @@index([teamLeaderUserId, occurredAt])
+  @@index([salesConsultantUserId, occurredAt])
+  @@index([startedByUserId, occurredAt])
+  @@index([workflowRunId])
 }
 
 model AiCall {

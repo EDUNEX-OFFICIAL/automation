@@ -4,15 +4,21 @@ export const AUTOMATION_OPERATIONS = [
   "enquiry_transfer",
   "follow_up",
   "follow_up_skip",
+  "lost_inquiry",
   "exchange",
   "test_drive",
 ] as const;
 
 /** Operations exposed in UI and accepted by the API/worker (others disabled for now). */
-export const ENABLED_AUTOMATION_OPERATIONS = ["enquiry_transfer", "follow_up_skip", "follow_up"] as const;
+export const ENABLED_AUTOMATION_OPERATIONS = [
+  "enquiry_transfer",
+  "follow_up_skip",
+  "follow_up",
+  "lost_inquiry",
+] as const;
 
-/** Manual START on Dashboard — follow_up_skip is scheduled via Settings only. */
-export const DASHBOARD_MANUAL_OPERATIONS = ["enquiry_transfer", "follow_up"] as const;
+/** Manual START on Dashboard — follow_up_skip / lost_inquiry also have Settings run-now. */
+export const DASHBOARD_MANUAL_OPERATIONS = ["enquiry_transfer", "follow_up", "lost_inquiry"] as const;
 
 export type EnabledAutomationOperation = (typeof ENABLED_AUTOMATION_OPERATIONS)[number];
 
@@ -28,6 +34,7 @@ export const OPERATION_LABELS: Record<AutomationOperation, string> = {
   enquiry_transfer: "Enquiry transfer",
   follow_up: "Follow up",
   follow_up_skip: "Follow up skip",
+  lost_inquiry: "Lost inquiry",
   exchange: "Exchange",
   test_drive: "Test drive",
 };
@@ -81,7 +88,11 @@ export const automationRunParamsSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
-    if (data.operation === "follow_up_skip" || data.operation === "follow_up") {
+    if (
+      data.operation === "follow_up_skip" ||
+      data.operation === "follow_up" ||
+      data.operation === "lost_inquiry"
+    ) {
       return;
     }
     if (data.sources.length < 1) {
@@ -169,7 +180,9 @@ export function isAutomationFormValid(
   subSources: SubSourcesSelection,
 ): boolean {
   if (!operation) return false;
-  if (operation === "follow_up_skip" || operation === "follow_up") return true;
+  if (operation === "follow_up_skip" || operation === "follow_up" || operation === "lost_inquiry") {
+    return true;
+  }
   if (sources.length === 0) return false;
   return SUB_SOURCE_PARENTS.every(
     (parent) => !sources.includes(parent) || (subSources[parent]?.length ?? 0) > 0,
@@ -177,5 +190,7 @@ export function isAutomationFormValid(
 }
 
 export function operationNeedsSources(operation: AutomationOperation): boolean {
-  return operation !== "follow_up_skip" && operation !== "follow_up";
+  return (
+    operation !== "follow_up_skip" && operation !== "follow_up" && operation !== "lost_inquiry"
+  );
 }

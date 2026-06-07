@@ -12,6 +12,7 @@ import { applyInputGuardToPage, setAutomationInputBypass } from "./automation-br
 import { env } from "./config.js";
 import { createPrisma } from "@gdms/database";
 import { pickNextSalesConsultant, type ConsultantRotationState } from "./consultant-rotation.js";
+import { recordAutomationStatEvent } from "./automation-stat-events.js";
 import { incrementRunMetric } from "./run-metrics.js";
 
 const prisma = createPrisma();
@@ -22,21 +23,26 @@ import {
   pause,
   pickRandom,
   pollDelay,
-  randomBetween,
   scaleMs,
   scaledRandomBetween,
   searchIntervalDelay,
+  followUpSaveDelay,
+  saveClickSettleDelay,
 } from "./human-delay.js";
 import {
   clearGdmsUiRootCache,
+  clearResumeTransferRequest,
   clickCustomerEnquiryFlyoutMgt,
   clickCustomerEnquirySidebarIcon,
   flyoutShowsCustomerEnquiryMgt,
   isCustomerEnquiryTreeExpanded,
   isOnCustomerEnquiryList,
   isOnTodaysFollowUpList,
+  isResumeTransferRequested,
   isSalesFlyoutOnlyOpen,
+  releaseTransferLock,
   resolveGdmsUiRoot,
+  tryAcquireTransferLock,
   waitForCustomerEnquiryTreeExpanded,
   waitForGdmsDashboardReady,
   type GdmsUiRoot,
@@ -47,10 +53,10 @@ export { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 const PIN_CODES = ["800001", "800006", "800020", "800026"] as const;
 /** Follow Up tab required field (GDMS shows "*Enquiry Type"). */
 const ENQUIRY_TYPE_LABEL_RE = /^\*?\s*Enquiry\s*Type\s*$/i;
-/** Random pause after Follow Up data complete, before #btnFollowUpSave (max 4s). */
-const FOLLOW_UP_SAVE_DELAY_MAX_MS = 4_000;
-const FOLLOW_UP_SAVE_DELAY_MIN_MS = 1_200;
 const SUCCESS_TOAST = /successfully reflected/i;
+const ENQUIRY_MODAL_BASIC_INFO_TAB_RE = /^Basic\s*Info\.?$/i;
+const ENQUIRY_MODAL_FOLLOW_UP_TAB_RE = /^Follow\s*[-]?\s*Up\.?$/i;
+const FOLLOW_UP_REMARKS_LABEL_RE = /\*?\s*Follow Up Remarks/i;
 
 function isPlaywrightDetachError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -65,7 +71,7 @@ function isPlaywrightDetachError(err: unknown): boolean {
 const MAX_ENQUIRY_SURFACE_STUCK_RESAVES = 3;
 /** Wait window for popup/modal to close on its own (ms). */
 function popupCloseWaitMs(): number {
-  return scaledRandomBetween(10_000, 20_000);
+  return scaledRandomBetween(5_000, 10_000);
 }
 /** GDMS marks required fields with a leading asterisk (*), e.g. "* PIN", "* Verification" — not the word "Star". */
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
@@ -92,6 +98,8 @@ export type EnquiryTransferContext = {
   startedByUserId: string;
   /** Filled on first round-robin pick for this run (TL's SC list). */
   rotation?: ConsultantRotationState;
+  /** Last SC assigned on Basic Info — used for dashboard stats only. */
+  lastAssignedConsultant?: string;
   redis: Redis;
   sources: string[];
   subSources?: Record<string, string[]>;
@@ -102,6 +110,18 @@ export type EnquiryTransferContext = {
   /** Persist PAUSED_USER + socket event; always throws ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE */
   signalManualIntervention: (message: string) => Promise<never>;
 };
+
+/** Cooperative stop/pause/resume between list polls (does not change form-fill logic). */
+async function automationCheckpoint(ctx: EnquiryTransferContext, log?: EnquiryTransferContext["log"]): Promise<void> {
+  if (await ctx.shouldStop()) throw new Error("stopped");
+  await ctx.waitIfPaused();
+  if (ctx.redis && (await isResumeTransferRequested(ctx.redis, ctx.runId))) {
+    await clearResumeTransferRequest(ctx.redis, ctx.runId);
+    if (log) {
+      await log("info", "Continue transfer acknowledged — proceeding from current GDMS screen.");
+    }
+  }
+}
 
 async function resolveEnquiryFollowUpRemark(
   page: Page,
@@ -119,6 +139,14 @@ async function resolveEnquiryFollowUpRemark(
 
 function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function enquiryTabLabelMatches(label: string, tabRe: RegExp): boolean {
+  const n = norm(label);
+  if (tabRe.test(n)) return true;
+  if (/follow/i.test(tabRe.source) && /^follow\s*[-]?\s*up\.?$/.test(n)) return true;
+  if (/basic/i.test(tabRe.source) && /^basic\s*info\.?$/.test(n)) return true;
+  return false;
 }
 
 function escapeRegExp(s: string): string {
@@ -465,10 +493,10 @@ async function waitForSearchResultsSettle(
   const loader = surface.locator(
     ".k-loading-mask:visible, .k-i-loading:visible, [class*='loading']:visible, [aria-busy='true']",
   );
-  await loader.first().waitFor({ state: "hidden", timeout: 9_000 }).catch(() => {});
-  await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+  await loader.first().waitFor({ state: "hidden", timeout: scaleMs(9_000) }).catch(() => {});
+  await page.waitForLoadState("domcontentloaded", { timeout: scaleMs(2_500) }).catch(() => {});
 
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 8; i++) {
     const count = await surface.locator("table tbody tr").count();
     if (count !== prevCount || i >= 3) return count;
     await pollDelay(400);
@@ -596,9 +624,9 @@ async function clickSearchOnPage(
       );
     }
     await btn.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
-    await humanDelay(300, 800);
+    await humanDelay(200, 500);
     await btn.click({ timeout: 9_000, force: true });
-    await humanDelay(1200, 2800);
+    await humanDelay(450, 950);
     await waitForSearchResultsSettle(ui, page, prevBodyCount);
   } finally {
     await setAutomationInputBypass(page, false);
@@ -819,28 +847,118 @@ async function visiblePinDialog(page: Page): Promise<Locator> {
 }
 
 /** Double-click row; returns the page that hosts SALES CUSTOMER ENQUIRY INFO (popup or same tab). */
-export async function openEnquiryDetailPage(row: Locator): Promise<Page> {
+export async function openEnquiryDetailPage(
+  row: Locator,
+  opts?: { fast?: boolean },
+): Promise<Page> {
   const listPage = row.page();
-  const popupPromise = listPage.waitForEvent("popup", { timeout: 6_000 }).catch(() => null);
-  await setAutomationInputBypass(listPage, true);
-  try {
-    await row.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
-    await humanDelay(400, 900);
-    await row.dblclick({ timeout: 7_000, force: true });
-  } finally {
-    await setAutomationInputBypass(listPage, false);
-  }
-  const popup = await popupPromise;
-  const detailPage = popup ?? listPage;
-  const deadline = Date.now() + 45_000;
-  while (Date.now() < deadline) {
-    if (await isAnyEnquiryModalVisible(detailPage)) {
-      await humanDelay();
-      return detailPage;
+  const fast = opts?.fast === true;
+  const modalWaitMs = fast ? 10_000 : 22_000;
+  const pollMs = fast ? 100 : 400;
+  const dblClickTimeout = fast ? 4_000 : 7_000;
+  const preClickDelay = fast ? [80, 180] as const : [350, 800] as const;
+
+  async function findModalHost(...pages: Page[]): Promise<Page | null> {
+    for (const p of pages) {
+      if (p.isClosed()) continue;
+      if (await isAnyEnquiryModalVisible(p)) return p;
     }
-    await pollDelay(400);
+    return null;
   }
-  throw new Error("SALES CUSTOMER ENQUIRY INFO modal did not appear after double-clicking enquiry row");
+
+  async function waitForModalHost(pages: Page[], timeoutMs: number): Promise<Page | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const host = await findModalHost(...pages);
+      if (host) return host;
+      await pollDelay(pollMs);
+    }
+    return null;
+  }
+
+  /** Race same-tab modal vs popup — do not block on popup when modal already opened inline. */
+  async function doubleClickTarget(target: Locator): Promise<Page | null> {
+    const popups: Page[] = [];
+    const popupListener = listPage
+      .waitForEvent("popup", { timeout: modalWaitMs })
+      .then((p) => {
+        popups.push(p);
+        return p;
+      })
+      .catch(() => null);
+
+    await setAutomationInputBypass(listPage, true);
+    try {
+      await target.scrollIntoViewIfNeeded({ timeout: fast ? 3_000 : 8_000 }).catch(() => {});
+      if (!fast) await humanDelay(preClickDelay[0], preClickDelay[1]);
+      await target.dblclick({ timeout: dblClickTimeout, force: true });
+    } finally {
+      await setAutomationInputBypass(listPage, false);
+    }
+
+    const deadline = Date.now() + modalWaitMs;
+    while (Date.now() < deadline) {
+      const inline = await findModalHost(listPage);
+      if (inline) {
+        void popupListener;
+        return inline;
+      }
+
+      const popup = popups[0];
+      if (popup && !popup.isClosed()) {
+        await popup.waitForLoadState("domcontentloaded", { timeout: fast ? 5_000 : 12_000 }).catch(() => undefined);
+        const popupHost = await waitForModalHost([popup, listPage], Math.max(500, deadline - Date.now()));
+        if (popupHost) return popupHost;
+      }
+
+      await Promise.race([popupListener, pollDelay(pollMs)]);
+      const popupAfter = popups[0];
+      if (popupAfter && !popupAfter.isClosed()) {
+        const popupHost = await findModalHost(popupAfter);
+        if (popupHost) return popupHost;
+      }
+    }
+
+    const lastPopup = popups[0];
+    return findModalHost(listPage, ...(lastPopup && !lastPopup.isClosed() ? [lastPopup] : []));
+  }
+
+  let host = await doubleClickTarget(row);
+
+  if (!host) {
+    const cell = row.locator("td").nth(1);
+    if (await cell.isVisible({ timeout: fast ? 800 : 2_000 }).catch(() => false)) {
+      host = await doubleClickTarget(cell);
+    }
+  }
+
+  if (!host && !fast) {
+    await setAutomationInputBypass(listPage, true);
+    try {
+      await row.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
+      await row.click({ clickCount: 2, timeout: 7_000, force: true });
+    } finally {
+      await setAutomationInputBypass(listPage, false);
+    }
+    host = await waitForModalHost([listPage], modalWaitMs);
+  }
+
+  if (!host && !fast) {
+    host = await doubleClickTarget(row);
+  }
+
+  if (!host) {
+    throw new Error("SALES CUSTOMER ENQUIRY INFO modal did not appear after double-clicking enquiry row");
+  }
+  await humanDelay();
+  return host;
+}
+
+/** Selected Sales Consultant on Basic Info (stats / LI — not used by ET/FUS core flow). */
+export async function readSalesConsultantFromEnquiryModal(page: Page): Promise<string | null> {
+  const modal = await visibleEnquiryModal(page);
+  const raw = (await readDropdownDisplayNearLabel(modal, /\*?\s*Sales\s*Consultant/i)).trim();
+  return raw.length > 0 ? raw : null;
 }
 
 async function waitForDetailPopupClosed(detailPage: Page, timeoutMs: number): Promise<boolean> {
@@ -1353,7 +1471,7 @@ async function typePinInFilterAndSearch(
     searchPin = pinDialog.getByRole("button", { name: /^search$/i }).first();
   }
   await humanHoverClick(searchPin);
-  await humanDelay(2000, 4500);
+  await humanDelay(env.GDMS_PIN_SEARCH_DELAY_MIN_MS, env.GDMS_PIN_SEARCH_DELAY_MAX_MS);
 }
 
 async function fillPinAndAdd(page: Page, log: EnquiryTransferContext["log"]): Promise<void> {
@@ -1382,7 +1500,7 @@ async function fillPinAndAdd(page: Page, log: EnquiryTransferContext["log"]): Pr
       searchPin = pinDialog.getByRole("button", { name: /^search$/i }).first();
     }
     await humanHoverClick(searchPin);
-    await humanDelay(2000, 4500);
+    await humanDelay(env.GDMS_PIN_SEARCH_DELAY_MIN_MS, env.GDMS_PIN_SEARCH_DELAY_MAX_MS);
   }
 
   const resultRows = await resolvePinResultRows(pinDialog);
@@ -1465,20 +1583,14 @@ async function isInKendoDataGrid(loc: Locator): Promise<boolean> {
 }
 
 /** Editable Follow Up fields block (excludes history grid at bottom). */
-async function resolveFollowUpFieldsContainer(page: Page, modal: Locator): Promise<Locator> {
-  try {
-    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
-      const remarks = await tryResolveFollowUpRemarksInRoot(root);
-      if (!remarks) continue;
-      const box = remarks.locator(
-        "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
-      );
-      if (await box.isVisible({ timeout: 2_000 }).catch(() => false)) return box;
-    }
-  } catch {
-    /* fall through */
+async function resolveFollowUpFieldsContainer(formRoot: Locator): Promise<Locator> {
+  const remarksLabel = formRoot.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+  if (await remarksLabel.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    const box = remarksLabel.locator(
+      "xpath=ancestor::*[contains(@class,'box_form') or contains(@class,'form_st')][1]",
+    );
+    if (await box.isVisible({ timeout: 2_000 }).catch(() => false)) return box;
   }
-  const formRoot = await enquiryModalFormRoot(modal);
   const history = formRoot.getByText(/^Follow Up History/i).first();
   if (await history.isVisible({ timeout: 1_500 }).catch(() => false)) {
     const section = history.locator(
@@ -1487,6 +1599,168 @@ async function resolveFollowUpFieldsContainer(page: Page, modal: Locator): Promi
     if (await section.isVisible({ timeout: 1_000 }).catch(() => false)) return section;
   }
   return formRoot;
+}
+
+/** Visible k-tabstrip panel containing Follow Up Remarks (not Basic Info). */
+async function resolveFollowUpTabPanel(modal: Locator): Promise<Locator> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const panels = formRoot.locator(".k-tabstrip > .k-content, .k-tabstrip .k-content");
+  const n = await panels.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const panel = panels.nth(i);
+    if (!(await panel.isVisible({ timeout: 600 }).catch(() => false))) continue;
+    const remarks = panel.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+    if (await remarks.isVisible({ timeout: 600 }).catch(() => false)) return panel;
+  }
+  return resolveFollowUpFieldsContainer(formRoot);
+}
+
+/** Follow Up tab is active only when Remarks field is visible (not just History / tab highlight). */
+async function isFollowUpTabReallyActive(modal: Locator): Promise<boolean> {
+  try {
+    const formRoot = await enquiryModalFormRoot(modal);
+    const remarksLabel = formRoot.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+    if (!(await remarksLabel.isVisible({ timeout: 900 }).catch(() => false))) return false;
+    const tdOffer = formRoot.locator("dt, th, td, label").filter({ hasText: /^TD\s*Offer/i }).first();
+    const tdVis = await tdOffer.isVisible({ timeout: 350 }).catch(() => false);
+    if (tdVis && (await isBasicInfoTabSelected(modal))) return false;
+    const panel = await resolveFollowUpTabPanel(modal);
+    await resolveFollowUpRemarksInput(panel);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function clickFollowUpTabAlways(modal: Locator): Promise<void> {
+  const tab = await findEnquiryModalTabClickTarget(modal, ENQUIRY_MODAL_FOLLOW_UP_TAB_RE);
+  if (tab) {
+    await humanHoverClick(tab);
+  } else if (!(await clickEnquiryModalTabViaDom(modal.page(), ENQUIRY_MODAL_FOLLOW_UP_TAB_RE))) {
+    throw new Error("Follow Up tab strip item not found on SALES CUSTOMER ENQUIRY INFO modal.");
+  }
+  await humanDelay(350, 700);
+}
+
+/**
+ * Force Follow Up tab and wait until Remarks is editable.
+ * Logs once when opening the tab; warns only if GDMS jumps back to Basic Info.
+ */
+async function pinFollowUpTab(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<Locator> {
+  if (await isFollowUpTabReallyActive(modal)) {
+    return resolveFollowUpTabPanel(modal);
+  }
+  if (log) {
+    await log("info", "Follow Up tab — opening for remarks, types, date, Cold, and Save.");
+  }
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    if (await isFollowUpTabReallyActive(modal)) {
+      return resolveFollowUpTabPanel(modal);
+    }
+    if (log && attempt > 1) {
+      await log("warn", `Follow Up tab lost — re-clicking tab (${attempt}/5).`);
+    }
+    await clickFollowUpTabAlways(modal);
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (await isFollowUpTabReallyActive(modal)) return resolveFollowUpTabPanel(modal);
+      await pollDelay(300);
+    }
+  }
+  throw new Error(
+    "Follow Up tab did not stay active — Follow Up Remarks never became visible after Basic Info Save.",
+  );
+}
+
+/** Silent when already on Follow Up; re-pin with log only if tab was lost. */
+async function ensureFollowUpTabPanel(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<Locator> {
+  if (await isFollowUpTabReallyActive(modal)) {
+    return resolveFollowUpTabPanel(modal);
+  }
+  return pinFollowUpTab(modal, log);
+}
+
+async function readDropdownDisplayNearLabelInRoot(scopeRoot: Locator, label: RegExp): Promise<string> {
+  const dt = scopeRoot.locator("dt").filter({ hasText: label }).first();
+  if (await dt.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    const dd = dt.locator("xpath=following-sibling::dd[1]");
+    const display = dd.locator("span.k-input, .k-input-value, input").first();
+    const text = (await display.innerText().catch(() => "")).trim();
+    if (text) return text;
+    return (await display.inputValue().catch(() => "")).trim();
+  }
+  const labelCell = scopeRoot.locator("td, th").filter({ hasText: label }).first();
+  if (await labelCell.isVisible({ timeout: 1_500 }).catch(() => false)) {
+    const row = labelCell.locator("xpath=ancestor::tr[1]");
+    const display = row.locator("span.k-input, .k-input-value, input").first();
+    const text = (await display.innerText().catch(() => "")).trim();
+    if (text) return text;
+    return (await display.inputValue().catch(() => "")).trim();
+  }
+  const labelEl = scopeRoot.locator("dt, th, td, label").filter({ hasText: label }).first();
+  if (!(await labelEl.isVisible({ timeout: 800 }).catch(() => false))) return "";
+  const container = labelEl.locator("xpath=ancestor::*[contains(@class,'box_form') or self::tr][1]");
+  const valueEl = container.locator("span.k-input, .k-input-value, input").first();
+  if ((await valueEl.count()) < 1) return "";
+  const text = (await valueEl.innerText().catch(() => "")).trim();
+  if (text) return text;
+  return (await valueEl.inputValue().catch(() => "")).trim();
+}
+
+
+async function openKendoDropdownInScopedRoot(
+  modal: Locator,
+  scopeRoot: Locator,
+  label: RegExp,
+  _log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const trigger = await resolveKendoDropdownTriggerNearLabel(scopeRoot, label);
+  await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
+
+  const tryOpen = async (): Promise<boolean> => {
+    if (await kendoListPopupVisible(modal.page())) return true;
+    await humanHoverClick(trigger);
+    await microDelay();
+    await humanDelay(500, 1_100);
+    if (await kendoListPopupVisible(modal.page())) return true;
+    await tryOpenKendoWidgetViaDom(trigger);
+    await humanDelay(400, 900);
+    if (await kendoListPopupVisible(modal.page())) return true;
+    const display = await resolveKendoDropdownDisplayNearLabel(scopeRoot, label);
+    if (display) {
+      await humanHoverClick(display);
+      await humanDelay(400, 900);
+      if (await kendoListPopupVisible(modal.page())) return true;
+    }
+    return false;
+  };
+
+  if (!(await tryOpen())) {
+    throw new Error(`Kendo list did not open for ${String(label)} on Follow Up tab.`);
+  }
+}
+
+async function selectFollowUpDropdownNearLabel(
+  modal: Locator,
+  label: RegExp,
+  option: RegExp | string,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const panel = await ensureFollowUpTabPanel(modal, log);
+  const optRe =
+    typeof option === "string" ? new RegExp(`^${escapeRegExp(option)}$`, "i") : option;
+  await withModalInputBypass(modal, async () => {
+    await openKendoDropdownInScopedRoot(modal, panel, label, log);
+    await clickOptionInFormRoot(panel, optRe);
+  });
+  await humanDelay();
+  await ensureFollowUpTabPanel(modal);
 }
 
 async function kendoDropdownTriggerAfterLabelCell(labelCell: Locator): Promise<Locator | null> {
@@ -1888,12 +2162,11 @@ async function selectEnquiryTypeColdViaTypeahead(
 async function openKendoDropdownNearLabel(
   modal: Locator,
   label: RegExp,
-  log?: EnquiryTransferContext["log"],
+  _log?: EnquiryTransferContext["log"],
 ): Promise<void> {
   const formRoot = await enquiryModalFormRoot(modal);
   const trigger = await resolveKendoDropdownTriggerNearLabel(formRoot, label);
   await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
-  if (log) await log("info", `Opening dropdown for ${String(label)} (Kendo arrow / display).`);
 
   const tryOpen = async (): Promise<boolean> => {
     if (await kendoListPopupVisible(modal.page())) return true;
@@ -1977,29 +2250,7 @@ async function selectDropdownNearLabel(
 
 async function readDropdownDisplayNearLabel(modal: Locator, label: RegExp): Promise<string> {
   const formRoot = await enquiryModalFormRoot(modal);
-  const dt = formRoot.locator("dt").filter({ hasText: label }).first();
-  if (await dt.isVisible({ timeout: 1_500 }).catch(() => false)) {
-    const dd = dt.locator("xpath=following-sibling::dd[1]");
-    const display = dd.locator("span.k-input, .k-input-value, input").first();
-    const text = (await display.innerText().catch(() => "")).trim();
-    if (text) return text;
-    return (await display.inputValue().catch(() => "")).trim();
-  }
-  const labelCell = formRoot.locator("td, th").filter({ hasText: label }).first();
-  if (await labelCell.isVisible({ timeout: 1_500 }).catch(() => false)) {
-    const row = labelCell.locator("xpath=ancestor::tr[1]");
-    const display = row.locator("span.k-input, .k-input-value, input").first();
-    const text = (await display.innerText().catch(() => "")).trim();
-    if (text) return text;
-    return (await display.inputValue().catch(() => "")).trim();
-  }
-  const labelEl = formRoot.locator("dt, th, td").filter({ hasText: label }).first();
-  const container = labelEl.locator("xpath=ancestor::*[contains(@class,'box_form') or self::tr][1]");
-  const valueEl = container.locator("span.k-input, .k-input-value, input").first();
-  if ((await valueEl.count()) < 1) return "";
-  const text = (await valueEl.innerText().catch(() => "")).trim();
-  if (text) return text;
-  return (await valueEl.inputValue().catch(() => "")).trim();
+  return readDropdownDisplayNearLabelInRoot(formRoot, label);
 }
 
 async function scrollEnquiryInfoBottomIntoView(modal: Locator): Promise<void> {
@@ -2143,21 +2394,19 @@ async function waitForEnquiryBasicInfoAfterPin(
   );
 }
 
-async function ensureBasicInfoTabActive(modal: Locator): Promise<void> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  const tab = formRoot.getByText(/^Basic\s*Info/i).first();
-  if (await tab.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await humanHoverClick(tab);
-    await humanDelay(400, 900);
-  }
+async function ensureBasicInfoTabActive(modal: Locator, log?: EnquiryTransferContext["log"]): Promise<void> {
+  await clickEnquiryModalTab(modal, ENQUIRY_MODAL_BASIC_INFO_TAB_RE, log);
 }
 
-async function selectMandatoryVerificationY(modal: Locator): Promise<void> {
+async function selectMandatoryVerificationY(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
   const patterns: RegExp[] = [/\*\s*Verification\b/i, /\*Verification\b/i, /^Verification\b$/i];
   let lastErr: unknown;
   for (const re of patterns) {
     try {
-      await selectDropdownNearLabel(modal, re, /^Y$/i);
+      await selectFollowUpDropdownNearLabel(modal, re, /^Y$/i, log);
       return;
     } catch (e) {
       lastErr = e;
@@ -2167,8 +2416,14 @@ async function selectMandatoryVerificationY(modal: Locator): Promise<void> {
 }
 
 async function resolveFollowUpEnquiryTypeTrigger(modal: Locator): Promise<Locator> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  await scrollEnquiryInfoBottomIntoView(modal);
+  const formRoot = await resolveFollowUpTabPanel(modal);
+  try {
+    const trigger = await resolveKendoDropdownTriggerNearLabel(formRoot, ENQUIRY_TYPE_LABEL_RE);
+    await trigger.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+    return trigger;
+  } catch {
+    /* fall through to label scan */
+  }
   const labels = formRoot.locator("dt, th, td, label").filter({ hasText: ENQUIRY_TYPE_LABEL_RE });
   const n = await labels.count().catch(() => 0);
   for (let i = 0; i < n; i++) {
@@ -2231,7 +2486,13 @@ async function selectEnquiryTypeColdOnce(
   log: EnquiryTransferContext["log"],
 ): Promise<void> {
   const page = modal.page();
-  await scrollEnquiryInfoBottomIntoView(modal);
+  await ensureFollowUpTabPanel(modal, log);
+  try {
+    const trigger = await resolveFollowUpEnquiryTypeTrigger(modal);
+    await trigger.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+  } catch {
+    /* optional scroll */
+  }
 
   if (await isEnquiryTypeDisplayCold(modal)) {
     await log("info", "Enquiry Type already Cold — skipping.");
@@ -2245,9 +2506,11 @@ async function selectEnquiryTypeColdOnce(
       throw new Error('Enquiry Type — click dropdown, type "c", Enter did not show Cold.');
     }
     await dismissTransientKendoPopups(page);
-    await closeDateTimePickerWithoutClosingModal(modal);
+    await closeDateTimePickerWithoutClosingModal(modal, log);
     await humanDelay(200, 400);
   });
+
+  await ensureFollowUpTabPanel(modal);
 
   const display = (await readFollowUpEnquiryTypeDisplay(modal)).trim();
   if (!/\bcold\b/i.test(display)) {
@@ -2258,20 +2521,23 @@ async function selectEnquiryTypeColdOnce(
 
 const FOLLOW_UP_TYPE_LABEL_RE = /^Follow Up Type$/i;
 
-async function isFollowUpTabReadyExceptEnquiryType(page: Page, modal: Locator): Promise<boolean> {
-  if (!(await isFollowUpRemarksFilled(page, modal))) return false;
-  const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
+async function isFollowUpTabReadyExceptEnquiryType(modal: Locator): Promise<boolean> {
+  if (!(await isFollowUpTabReallyActive(modal))) return false;
+  const panel = await resolveFollowUpTabPanel(modal);
+  if (!(await isFollowUpRemarksFilled(panel))) return false;
+  const followType = await readDropdownDisplayNearLabelInRoot(panel, FOLLOW_UP_TYPE_LABEL_RE);
   if (!/^phone$/i.test(followType.trim())) return false;
-  const nextType = await readDropdownDisplayNearLabel(modal, /Next Follow Up Type/i);
+  const nextType = await readDropdownDisplayNearLabelInRoot(panel, /Next Follow Up Type/i);
   if (!/^phone$/i.test(nextType.trim())) return false;
-  const verification = await readDropdownDisplayNearLabel(modal, /\*?\s*Verification/i);
+  const verification = await readDropdownDisplayNearLabelInRoot(panel, /\*?\s*Verification/i);
   if (!/^y$/i.test(verification.trim())) return false;
   return isNextFollowUpTimeFilled(modal);
 }
 
-async function describeFollowUpReadiness(page: Page, modal: Locator): Promise<string> {
+async function describeFollowUpReadiness(modal: Locator): Promise<string> {
+  const formRoot = await enquiryModalFormRoot(modal);
   const parts: string[] = [];
-  parts.push(`remarks=${(await isFollowUpRemarksFilled(page, modal)) ? "ok" : "missing"}`);
+  parts.push(`remarks=${(await isFollowUpRemarksFilled(formRoot)) ? "ok" : "missing"}`);
   parts.push(
     `followUpType="${(await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim() || "(empty)"}"`,
   );
@@ -2294,8 +2560,7 @@ async function followUpEnquiryTypeThenSaveOnly(
   ctx: EnquiryTransferContext,
 ): Promise<void> {
   const modal = await visibleEnquiryModal(page);
-  const formRoot = await enquiryModalFormRoot(modal);
-  await humanHoverClick(formRoot.getByText(/^Follow Up$/i));
+  await ensureFollowUpTabActive(modal, log);
   await pause("short");
 
   await log("info", "Follow Up already filled — Enquiry Type (once) then Save only.");
@@ -2303,21 +2568,14 @@ async function followUpEnquiryTypeThenSaveOnly(
   await saveFollowUpUntilSuccess(page, log, ctx);
 }
 
-async function isFollowUpRemarksFilled(page: Page, modal: Locator): Promise<boolean> {
-  const domVal = (await readFollowUpRemarksValueViaDom(page)).trim();
-  if (isAutomationRemarkFilled(domVal)) return true;
-
+async function isFollowUpRemarksFilled(formRoot: Locator): Promise<boolean> {
   try {
-    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
-      const remarks = await tryResolveFollowUpRemarksInRoot(root);
-      if (!remarks) continue;
-      const t = (await remarks.inputValue().catch(() => "")).trim();
-      if (isAutomationRemarkFilled(t)) return true;
-    }
+    const remarks = await resolveFollowUpRemarksInput(formRoot);
+    const t = (await remarks.inputValue().catch(() => "")).trim();
+    return isAutomationRemarkFilled(t);
   } catch {
     return false;
   }
-  return false;
 }
 
 async function isNextFollowUpTimeFilled(modal: Locator): Promise<boolean> {
@@ -2441,6 +2699,97 @@ async function isBasicInfoTransferFieldsFilled(modal: Locator): Promise<boolean>
   return true;
 }
 
+/** Follow Up form fields visible — do not treat Follow Up History alone (visible on Basic Info too). */
+async function isFollowUpTabContentVisible(modal: Locator): Promise<boolean> {
+  if (await isBasicInfoTabSelected(modal)) return false;
+  if (await isFollowUpTabSelected(modal)) return true;
+
+  for (const scope of await collectEnquiryTabSearchScopes(modal)) {
+    if (
+      await scope
+        .getByText(FOLLOW_UP_REMARKS_LABEL_RE)
+        .first()
+        .isVisible({ timeout: 400 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+    if (
+      await scope
+        .getByText(/^Follow Up Type$/i)
+        .first()
+        .isVisible({ timeout: 400 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+    if (
+      await scope
+        .getByText(/^Next Follow Up Time/i)
+        .first()
+        .isVisible({ timeout: 400 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when GDMS header shows Basic Info Save (not Follow Up Save). */
+async function isBasicInfoTabSelected(modal: Locator): Promise<boolean> {
+  for (const scope of await collectEnquiryTabSearchScopes(modal)) {
+    const items = scope
+      .locator(".k-tabstrip-items .k-item, .k-tabstrip-items li, .k-tabstrip-item, [role='tab']")
+      .filter({ hasText: ENQUIRY_MODAL_BASIC_INFO_TAB_RE });
+    const n = await items.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const tab = items.nth(i);
+      if (!(await tab.isVisible({ timeout: 400 }).catch(() => false))) continue;
+      const active = await tab
+        .evaluate((el) => {
+          const cls = el.className?.toString() ?? "";
+          return (
+            cls.includes("k-active") ||
+            cls.includes("k-state-active") ||
+            cls.includes("k-selected") ||
+            el.getAttribute("aria-selected") === "true"
+          );
+        })
+        .catch(() => false);
+      if (active) return true;
+    }
+  }
+  const page = modal.page();
+  for (const ui of listUiContexts(page)) {
+    const basicVis = await ui
+      .locator("#btnBasicSave")
+      .first()
+      .isVisible({ timeout: 400 })
+      .catch(() => false);
+    const followVis = await ui
+      .locator("#btnFollowUpSave")
+      .first()
+      .isVisible({ timeout: 400 })
+      .catch(() => false);
+    if (basicVis && !followVis) return true;
+  }
+  return false;
+}
+
+/** True when Follow Up tab is selected and Remarks field is editable. */
+async function isFollowUpTabSelected(modal: Locator): Promise<boolean> {
+  return isFollowUpTabReallyActive(modal);
+}
+
+/** Keep automation on Follow Up tab (never skip — re-clicks if Basic Info took focus). */
+async function requireFollowUpTabActive(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await ensureFollowUpTabPanel(modal, log);
+}
+
 async function applyRotatingSalesConsultant(
   modal: Locator,
   ctx: EnquiryTransferContext,
@@ -2464,6 +2813,7 @@ async function applyRotatingSalesConsultant(
     );
   }
   await log("info", `Sales Consultant set: ${consultant}.`);
+  ctx.lastAssignedConsultant = consultant;
 }
 
 async function fillBasicInfoAfterPin(page: Page, ctx: EnquiryTransferContext): Promise<Locator> {
@@ -2615,8 +2965,8 @@ async function clickSaveButton(target: Locator, log: EnquiryTransferContext["log
 }
 
 /** Follow Up form complete: remarks, Phone, Y, time, Enquiry Type = Cold (display on form). */
-async function isFollowUpReadyForSave(page: Page, modal: Locator): Promise<boolean> {
-  if (!(await isFollowUpTabReadyExceptEnquiryType(page, modal))) return false;
+async function isFollowUpReadyForSave(modal: Locator): Promise<boolean> {
+  if (!(await isFollowUpTabReadyExceptEnquiryType(modal))) return false;
   return isEnquiryTypeDisplayCold(modal);
 }
 
@@ -2683,27 +3033,23 @@ async function waitForFollowUpReadyForSave(
   timeoutMs = 12_000,
 ): Promise<void> {
   const page = modal.page();
-  await closeDateTimePickerWithoutClosingModal(modal);
+  await closeDateTimePickerWithoutClosingModal(modal, log);
   await dismissTransientKendoPopups(page);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isFollowUpReadyForSave(page, modal)) {
+    if (await isFollowUpReadyForSave(modal)) {
       await log("info", "Follow Up data complete — ready for Save (#btnFollowUpSave).");
       return;
     }
     await dismissTransientKendoPopups(page);
     await pollDelay(350);
   }
-  throw new Error(`Follow Up not ready for Save (${await describeFollowUpReadiness(page, modal)}).`);
+  throw new Error(`Follow Up not ready for Save (${await describeFollowUpReadiness(modal)}).`);
 }
 
 async function waitBeforeFollowUpSave(log: EnquiryTransferContext["log"]): Promise<void> {
-  const waitMs = randomBetween(FOLLOW_UP_SAVE_DELAY_MIN_MS, FOLLOW_UP_SAVE_DELAY_MAX_MS);
-  await log(
-    "info",
-    `Follow Up data filled — random wait ${waitMs}ms (max ${FOLLOW_UP_SAVE_DELAY_MAX_MS}ms) before #btnFollowUpSave.`,
-  );
-  await new Promise((r) => setTimeout(r, waitMs));
+  const waitMs = await followUpSaveDelay();
+  await log("info", `Follow Up data filled — brief wait ${waitMs}ms before #btnFollowUpSave.`);
 }
 
 async function kendoDateTimePickerPopupVisible(page: Page): Promise<boolean> {
@@ -2732,25 +3078,251 @@ async function dismissTransientKendoPopups(page: Page): Promise<void> {
   await humanDelay(250, 450);
 }
 
-async function closeDateTimePickerWithoutClosingModal(modal: Locator): Promise<void> {
+async function closeDateTimePickerWithoutClosingModal(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
   if (!(await kendoDateTimePickerPopupVisible(modal.page()))) return;
   const formRoot = await enquiryModalFormRoot(modal);
-  const anchor = formRoot.getByText(/^Follow Up History/i).first();
+  const anchor = formRoot
+    .locator("dt, th, td, label")
+    .filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE })
+    .first();
   if (await anchor.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await anchor.click({ force: true }).catch(() => {});
   } else {
-    await formRoot.getByText(/^Follow Up$/i).first().click({ force: true }).catch(() => {});
+    const typeLabel = formRoot.getByText(/^Follow Up Type$/i).first();
+    if (await typeLabel.isVisible({ timeout: 800 }).catch(() => false)) {
+      await typeLabel.click({ force: true }).catch(() => {});
+    }
   }
   await humanDelay(300, 600);
+  await requireFollowUpTabActive(modal, log);
 }
 
-async function ensureFollowUpTabActive(modal: Locator): Promise<void> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  const tab = formRoot.getByText(/^Follow Up$/i).first();
-  if (await tab.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await humanHoverClick(tab);
-    await humanDelay(400, 800);
+async function collectEnquiryTabSearchScopes(modal: Locator): Promise<Locator[]> {
+  const page = modal.page();
+  const scopes: Locator[] = [modal, page.locator("body")];
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    scopes.push(frame.locator("body"));
   }
+  try {
+    scopes.push(await enquiryModalFormRoot(modal));
+  } catch {
+    /* ignore */
+  }
+  for (const ui of listUiContexts(page)) {
+    const win = ui
+      .locator(".k-window, [role='dialog']")
+      .filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i })
+      .last();
+    if (await win.isVisible({ timeout: 300 }).catch(() => false)) scopes.push(win);
+    const titled = enquiryInfoModalIn(ui).filter({ hasText: /SALES CUSTOMER ENQUIRY INFO/i }).last();
+    if (await titled.isVisible({ timeout: 300 }).catch(() => false)) scopes.push(titled);
+  }
+  return scopes;
+}
+
+async function isBasicInfoTabContentVisible(modal: Locator): Promise<boolean> {
+  for (const scope of await collectEnquiryTabSearchScopes(modal)) {
+    if (
+      await scope
+        .getByText(/Cancelation Info|Cancellation Info/i)
+        .first()
+        .isVisible({ timeout: 400 })
+        .catch(() => false)
+    ) {
+      return true;
+    }
+    if (await scope.locator("#btnBasicSave").isVisible({ timeout: 400 }).catch(() => false)) return true;
+    if (await scope.getByText(/^TD\s*Offer/i).first().isVisible({ timeout: 400 }).catch(() => false)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function isEnquiryModalTabActive(modal: Locator, tabRe: RegExp): Promise<boolean> {
+  for (const scope of await collectEnquiryTabSearchScopes(modal)) {
+    const items = scope
+      .locator(".k-tabstrip-items .k-item, .k-tabstrip-items li, .k-tabstrip-item, [role='tab']")
+      .filter({ hasText: tabRe });
+    const n = await items.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const tab = items.nth(i);
+      if (!(await tab.isVisible({ timeout: 400 }).catch(() => false))) continue;
+      const active = await tab
+        .evaluate((el) => {
+          const cls = el.className?.toString() ?? "";
+          return (
+            cls.includes("k-active") ||
+            cls.includes("k-state-active") ||
+            cls.includes("k-selected") ||
+            el.getAttribute("aria-selected") === "true"
+          );
+        })
+        .catch(() => false);
+      if (active) return true;
+    }
+  }
+  if (/basic/i.test(tabRe.source)) return isBasicInfoTabSelected(modal);
+  if (/follow\s*up/i.test(tabRe.source)) return isFollowUpTabSelected(modal);
+  return false;
+}
+
+async function findEnquiryModalTabClickTarget(modal: Locator, tabRe: RegExp): Promise<Locator | null> {
+  for (const scope of await collectEnquiryTabSearchScopes(modal)) {
+    const tabItems = scope.locator(
+      ".k-tabstrip-items .k-item, .k-tabstrip-items li, .k-tabstrip-item, [role='tab'], .k-tabstrip .k-link",
+    );
+    const n = await tabItems.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const tab = tabItems.nth(i);
+      if (!(await tab.isVisible({ timeout: 500 }).catch(() => false))) continue;
+      const text = (await tab.innerText().catch(() => "")).trim();
+      if (!enquiryTabLabelMatches(text, tabRe)) continue;
+      return tab;
+    }
+
+    const candidateGroups = [
+      scope.locator(".k-tabstrip-items .k-item, .k-tabstrip-items li").filter({ hasText: tabRe }),
+      scope.locator(".k-tabstrip-item").filter({ hasText: tabRe }),
+      scope.locator("[role='tab']").filter({ hasText: tabRe }),
+      scope.locator("ul.k-tabstrip-items span, ul.k-tabstrip-items a").filter({ hasText: tabRe }),
+      scope.getByText(tabRe, { exact: true }),
+    ];
+    for (const group of candidateGroups) {
+      const tab = group.first();
+      if (await tab.isVisible({ timeout: 800 }).catch(() => false)) return tab;
+    }
+  }
+  return null;
+}
+
+async function clickEnquiryModalTabViaDom(page: Page, tabRe: RegExp): Promise<boolean> {
+  const followUp = /follow/i.test(tabRe.source);
+  const basicInfo = /basic/i.test(tabRe.source);
+
+  const clickInContext = async (ctx: Page | Frame): Promise<boolean> =>
+    ctx
+      .evaluate(
+        ({ followUp, basicInfo }) => {
+          const normalize = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+          const matches = (t: string) => {
+            const n = normalize(t);
+            if (followUp) return /^follow\s*[-]?\s*up\.?$/.test(n);
+            if (basicInfo) return /^basic\s*info\.?$/.test(n);
+            return false;
+          };
+          const isEnquiryWindow = (el: Element) =>
+            /SALES CUSTOMER ENQUIRY INFO/i.test(el.textContent ?? "");
+          const roots = [
+            ...Array.from(document.querySelectorAll(".k-window, [role='dialog']")).filter(isEnquiryWindow),
+            document.body,
+          ];
+          for (const root of roots) {
+            const tabs = root.querySelectorAll(
+              ".k-tabstrip-items .k-item, .k-tabstrip-items li, .k-tabstrip-item, [role='tab']",
+            );
+            for (const tab of Array.from(tabs)) {
+              const text = normalize((tab as HTMLElement).innerText ?? tab.textContent ?? "");
+              if (!matches(text)) continue;
+              const link =
+                (tab.querySelector("a.k-link, .k-link, span.k-link") as HTMLElement | null) ??
+                (tab as HTMLElement);
+              link.click();
+              return true;
+            }
+          }
+          return false;
+        },
+        { followUp, basicInfo },
+      )
+      .catch(() => false);
+
+  if (await clickInContext(page)) return true;
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    if (await clickInContext(frame)) return true;
+  }
+  return false;
+}
+
+async function clickEnquiryModalTab(
+  modal: Locator,
+  tabRe: RegExp,
+  log?: EnquiryTransferContext["log"],
+  force = false,
+): Promise<void> {
+  if (!force) {
+    if (/follow\s*up/i.test(tabRe.source) && (await isFollowUpTabSelected(modal))) {
+      if (log) await log("info", "Follow Up tab already selected — skipping tab click.");
+      return;
+    }
+    if (/basic/i.test(tabRe.source) && (await isBasicInfoTabSelected(modal))) {
+      if (log) await log("info", "Basic Info tab already selected — skipping tab click.");
+      return;
+    }
+  } else if (force && /follow\s*up/i.test(tabRe.source)) {
+    /* force Follow Up — never skip; pinFollowUpTab handles verification */
+  } else if (await isEnquiryModalTabActive(modal, tabRe)) {
+    if (log) await log("info", `Enquiry tab already active: ${String(tabRe)}.`);
+    return;
+  }
+
+  if (!force && /follow\s*up/i.test(tabRe.source) && (await isFollowUpTabContentVisible(modal))) {
+    if (log) await log("info", "Follow Up form already visible — skipping tab click.");
+    return;
+  }
+  if (!force && /basic/i.test(tabRe.source) && (await isBasicInfoTabContentVisible(modal))) {
+    if (log) await log("info", "Basic Info form already visible — skipping tab click.");
+    return;
+  }
+
+  const tab = await findEnquiryModalTabClickTarget(modal, tabRe);
+  if (!tab) {
+    const page = modal.page();
+    if (await clickEnquiryModalTabViaDom(page, tabRe)) {
+      if (log) await log("info", `Enquiry tab activated via DOM fallback: ${String(tabRe)}.`);
+      await humanDelay(500, 1_000);
+    } else {
+      if (/follow\s*up/i.test(tabRe.source) && (await isFollowUpTabContentVisible(modal))) return;
+      if (/basic/i.test(tabRe.source) && (await isBasicInfoTabContentVisible(modal))) return;
+      throw new Error(`Enquiry modal tab not found: ${String(tabRe)}`);
+    }
+  } else {
+    await humanHoverClick(tab);
+    await humanDelay(500, 1_000);
+  }
+
+  const deadline = Date.now() + 6_000;
+  while (Date.now() < deadline) {
+    if (await isEnquiryModalTabActive(modal, tabRe)) {
+      if (log) await log("info", `Enquiry tab activated: ${String(tabRe)}.`);
+      return;
+    }
+    if (/follow\s*up/i.test(tabRe.source) && (await isFollowUpTabSelected(modal))) {
+      if (log) await log("info", "Follow Up content visible after tab click.");
+      return;
+    }
+    if (/basic/i.test(tabRe.source) && (await isBasicInfoTabSelected(modal))) {
+      if (log) await log("info", "Basic Info content visible after tab click.");
+      return;
+    }
+    await pollDelay(350);
+  }
+
+  if (/follow\s*up/i.test(tabRe.source) && (await isFollowUpTabSelected(modal))) return;
+  if (/basic/i.test(tabRe.source) && (await isBasicInfoTabSelected(modal))) return;
+  throw new Error(`Enquiry modal tab did not activate after click: ${String(tabRe)}`);
+}
+
+async function ensureFollowUpTabActive(
+  modal: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await ensureFollowUpTabPanel(modal, log);
 }
 
 async function ensureEnquiryModalOpenForFollowUpSave(
@@ -2765,7 +3337,7 @@ async function ensureEnquiryModalOpenForFollowUpSave(
   const modal = await visibleEnquiryModal(page);
   await modal.waitFor({ state: "visible", timeout: 9_000 });
   await ensureFollowUpTabActive(modal);
-  await closeDateTimePickerWithoutClosingModal(modal);
+  await closeDateTimePickerWithoutClosingModal(modal, log);
   await dismissTransientKendoPopups(page);
 
   const deadline = Date.now() + 15_000;
@@ -2787,10 +3359,6 @@ async function scrollFollowUpSaveIntoView(page: Page): Promise<void> {
   try {
     const saveBtn = await resolveFollowUpSaveButton(page);
     await saveBtn.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
-    const kWindow = await resolveEnquiryKendoWindow(page);
-    await kWindow.evaluate((el) => {
-      (el as HTMLElement).scrollTop = 0;
-    }).catch(() => {});
   } catch {
     await page
       .evaluate(() => {
@@ -2812,9 +3380,6 @@ async function clickBtnFollowUpSave(page: Page, log: EnquiryTransferContext["log
   const kWindow = await resolveEnquiryKendoWindow(page);
   const saveBtn = await resolveFollowUpSaveButton(page);
 
-  await kWindow.evaluate((el) => {
-    (el as HTMLElement).scrollTop = 0;
-  }).catch(() => {});
   await saveBtn.scrollIntoViewIfNeeded({ timeout: 7_000 }).catch(() => {});
   await humanDelay(300, 600);
 
@@ -2902,7 +3467,7 @@ async function saveFollowUpUntilSuccess(
     try {
       await withPageInputBypass(page, async () => {
         modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
-        await closeDateTimePickerWithoutClosingModal(modal);
+        await closeDateTimePickerWithoutClosingModal(modal, log);
         await dismissTransientKendoPopups(page);
         await scrollFollowUpSaveIntoView(page);
         await clickBtnFollowUpSave(page, log);
@@ -2914,10 +3479,7 @@ async function saveFollowUpUntilSuccess(
         `Follow Up Save attempt ${attempt} — frame detached during click; checking if CRM already saved and closed the modal.`,
       );
     }
-    await humanDelay(
-      env.GDMS_SAVE_RETRY_INTERVAL_MS,
-      env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
-    );
+    await saveClickSettleDelay();
     if (await confirmFollowUpSaveSucceeded(page, log)) {
       await log("info", "Follow Up Save succeeded (#btnFollowUpSave).");
       return;
@@ -2960,7 +3522,7 @@ async function confirmFollowUpSaveSucceeded(
       );
       return true;
     }
-    await pollDelay(350);
+    await pollDelay(250);
   }
   return false;
 }
@@ -2991,13 +3553,40 @@ async function saveUntilSuccess(
 ): Promise<void> {
   for (let attempt = 1; attempt <= env.GDMS_SAVE_MAX_ATTEMPTS; attempt++) {
     await clickVisibleSaveInModal(page, log, preferFinalSave);
-    await humanDelay(
-      env.GDMS_SAVE_RETRY_INTERVAL_MS,
-      env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
-    );
+    await saveClickSettleDelay();
     if (await isSuccessToastVisible(page)) {
       await log("info", "Save succeeded (success toast visible).");
       return;
+    }
+    if (!preferFinalSave) {
+      try {
+        const modal = await visibleEnquiryModal(page);
+        if (await isFollowUpTabReallyActive(modal)) {
+          await log("info", "Basic Info Save succeeded — Follow Up tab is active.");
+          return;
+        }
+      } catch {
+        /* modal not ready yet */
+      }
+    }
+    const confirmDeadline = Date.now() + scaleMs(10_000);
+    while (Date.now() < confirmDeadline) {
+      if (await isSuccessToastVisible(page)) {
+        await log("info", "Save succeeded (success toast visible).");
+        return;
+      }
+      if (!preferFinalSave) {
+        try {
+          const modal = await visibleEnquiryModal(page);
+          if (await isFollowUpTabReallyActive(modal)) {
+            await log("info", "Basic Info Save succeeded — Follow Up tab is active.");
+            return;
+          }
+        } catch {
+          /* modal not ready yet */
+        }
+      }
+      await pollDelay(220);
     }
     await log("warn", `Save attempt ${attempt} — waiting for success toast.`);
   }
@@ -3247,302 +3836,45 @@ async function navigateCalendarToDate(
   }
 }
 
-const FOLLOW_UP_REMARKS_LABEL_RE = /\*?\s*Follow Up Remarks/i;
-const REMARK_INPUT_SELECTOR =
-  "textarea, input[type='text']:not([readonly]):not([disabled])";
+async function resolveFollowUpRemarksInput(formRoot: Locator): Promise<Locator> {
+  const inputSelectors = "textarea, input:not([type='hidden']):not([type='checkbox']):not([type='radio'])";
 
-type RemarkSearchRoot = Page | Frame | Locator;
-
-async function enumerateRemarkSearchRoots(page: Page, modal: Locator): Promise<RemarkSearchRoot[]> {
-  const roots: RemarkSearchRoot[] = [page, ...page.frames(), modal];
-  roots.push(await enquiryModalFormRoot(modal));
-  const iframeCount = await modal.locator("iframe").count().catch(() => 0);
-  for (let i = 0; i < iframeCount; i++) {
-    roots.push(modal.frameLocator(`iframe >> nth=${i}`).locator("body"));
-  }
-  return roots;
-}
-
-async function scrollToFollowUpRemarksSectionInRoot(root: RemarkSearchRoot): Promise<void> {
-  const section = root
-    .locator("dt, th, td, label, span, h3, h4, legend")
-    .filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE })
-    .first();
-  if (await section.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await section.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
-    await humanDelay(400, 800);
-  }
-}
-
-async function tryResolveFollowUpRemarksInRoot(root: RemarkSearchRoot): Promise<Locator | null> {
-  await scrollToFollowUpRemarksSectionInRoot(root);
-
-  const label = root.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
-  if (await label.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    const row = label.locator("xpath=ancestor::tr[1]");
-    const inRow = row.locator(REMARK_INPUT_SELECTOR).first();
-    if (await inRow.isVisible({ timeout: 1_500 }).catch(() => false)) return inRow;
-    const dd = label.locator("xpath=following-sibling::dd[1]");
-    const inDd = dd.locator(REMARK_INPUT_SELECTOR).first();
-    if (await inDd.isVisible({ timeout: 1_500 }).catch(() => false)) return inDd;
-    const followingTextarea = label.locator("xpath=following::textarea[1]");
-    if (await followingTextarea.isVisible({ timeout: 1_000 }).catch(() => false)) return followingTextarea;
-    const followingInput = label.locator("xpath=following::input[@type='text'][1]");
-    if (await followingInput.isVisible({ timeout: 1_000 }).catch(() => false)) return followingInput;
-  }
-
-  const rowWithLabel = root.locator("tr").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
-  if (await rowWithLabel.isVisible({ timeout: 1_500 }).catch(() => false)) {
-    const inRow = rowWithLabel.locator(REMARK_INPUT_SELECTOR).first();
-    if (await inRow.isVisible({ timeout: 1_500 }).catch(() => false)) return inRow;
-  }
-
-  const byLabel = root.getByLabel(FOLLOW_UP_REMARKS_LABEL_RE).first();
-  if (await byLabel.isVisible({ timeout: 1_500 }).catch(() => false)) return byLabel;
-
-  const byName = root
-    .locator(
-      "textarea[name*='Remark' i], textarea[id*='Remark' i], input[type='text'][name*='Remark' i], input[type='text'][id*='Remark' i]",
-    )
-    .first();
-  if (await byName.isVisible({ timeout: 1_000 }).catch(() => false)) return byName;
-
-  const inputs = root.locator(REMARK_INPUT_SELECTOR);
-  const n = await inputs.count().catch(() => 0);
-  for (let i = 0; i < n; i++) {
-    const inp = inputs.nth(i);
-    if (!(await inp.isVisible({ timeout: 500 }).catch(() => false))) continue;
-    const nearRemarks = await inp
-      .evaluate((el) => {
-        let node: HTMLElement | null = el as HTMLElement;
-        for (let d = 0; d < 15 && node; d++) {
-          const text = (node.textContent ?? "").replace(/\s+/g, " ");
-          if (/\*?\s*follow\s*up\s*remarks/i.test(text) && !/scheme\s*offered/i.test(text)) return true;
-          node = node.parentElement;
-        }
-        return false;
-      })
-      .catch(() => false);
-    if (nearRemarks) return inp;
-  }
-
-  return null;
-}
-
-async function readFollowUpRemarksValueViaDom(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const isRemarksLabel = (t: string) => /\*?\s*follow\s*up\s*remarks/i.test(t.replace(/\s+/g, " "));
-    const isScheme = (t: string) => /scheme\s*offered/i.test(t);
-
-    function pickInput(container: Element): HTMLTextAreaElement | HTMLInputElement | null {
-      for (const el of Array.from(container.querySelectorAll("textarea, input[type='text']"))) {
-        if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) continue;
-        if (el.disabled || el.readOnly) continue;
-        const ctx = (el.closest("tr, dl, dd, div")?.textContent ?? "").replace(/\s+/g, " ");
-        if (isScheme(ctx) && !isRemarksLabel(ctx)) continue;
-        return el;
-      }
-      return null;
-    }
-
-    function searchIn(root: ParentNode): string {
-      const labels = Array.from(root.querySelectorAll("dt, th, td, label, span, legend"));
-      for (const label of labels) {
-        const labelText = (label.textContent ?? "").replace(/\s+/g, " ");
-        if (!isRemarksLabel(labelText)) continue;
-        if (label.tagName === "DT") {
-          const dd = label.nextElementSibling;
-          if (dd) {
-            const el = pickInput(dd);
-            if (el) return el.value ?? "";
-          }
-        }
-        const row = label.closest("tr");
-        if (row) {
-          const el = pickInput(row);
-          if (el) return el.value ?? "";
-        }
-      }
-      return "";
-    }
-
-    const hosts: ParentNode[] = [document];
-    for (const win of Array.from(document.querySelectorAll(".k-window, [role='dialog']"))) {
-      if (!/SALES CUSTOMER ENQUIRY INFO/i.test(win.textContent ?? "")) continue;
-      hosts.push(win);
-      for (const iframe of Array.from(win.querySelectorAll("iframe"))) {
-        try {
-          const doc = (iframe as HTMLIFrameElement).contentDocument;
-          if (doc?.body) hosts.push(doc.body);
-        } catch {
-          /* cross-origin */
-        }
+  const findInRoot = async (root: Locator): Promise<Locator | null> => {
+    const label = root.locator("dt, th, td, label").filter({ hasText: FOLLOW_UP_REMARKS_LABEL_RE }).first();
+    if (await label.isVisible({ timeout: 1_500 }).catch(() => false)) {
+      await label.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
+      const row = label.locator("xpath=ancestor::tr[1]");
+      const inRow = row.locator(inputSelectors).first();
+      if (await inRow.isVisible({ timeout: 1_500 }).catch(() => false)) return inRow;
+      const dd = label.locator("xpath=following-sibling::dd[1]");
+      const inDd = dd.locator(inputSelectors).first();
+      if (await inDd.isVisible({ timeout: 1_500 }).catch(() => false)) return inDd;
+      for (const xp of ["xpath=following::textarea[1]", "xpath=following::input[not(@type='hidden')][1]"]) {
+        const following = label.locator(xp);
+        if (await following.isVisible({ timeout: 1_500 }).catch(() => false)) return following;
       }
     }
-    for (const host of hosts) {
-      const val = searchIn(host);
-      if (val) return val;
-    }
-    return "";
-  });
-}
+    const byLabel = root.getByLabel(FOLLOW_UP_REMARKS_LABEL_RE).first();
+    if (await byLabel.isVisible({ timeout: 1_500 }).catch(() => false)) return byLabel;
+    return null;
+  };
 
-async function fillFollowUpRemarksViaDom(
-  page: Page,
-  remarkText: string,
-  log: EnquiryTransferContext["log"],
-): Promise<boolean> {
-  const ok = await page.evaluate((text) => {
-    const isRemarksLabel = (t: string) => /\*?\s*follow\s*up\s*remarks/i.test(t.replace(/\s+/g, " "));
-    const isScheme = (t: string) => /scheme\s*offered/i.test(t);
-
-    function pickInput(container: Element): HTMLTextAreaElement | HTMLInputElement | null {
-      for (const el of Array.from(container.querySelectorAll("textarea, input[type='text']"))) {
-        if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) continue;
-        if (el.disabled || el.readOnly) continue;
-        const ctx = (el.closest("tr, dl, dd, div")?.textContent ?? "").replace(/\s+/g, " ");
-        if (isScheme(ctx) && !isRemarksLabel(ctx)) continue;
-        return el;
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    const direct = await findInRoot(formRoot);
+    if (direct) return direct;
+    try {
+      const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
+      if (fieldsRoot !== formRoot) {
+        const scoped = await findInRoot(fieldsRoot);
+        if (scoped) return scoped;
       }
-      return null;
+    } catch {
+      /* ignore */
     }
-
-    function searchAndFill(root: ParentNode): boolean {
-      const labels = Array.from(root.querySelectorAll("dt, th, td, label, span, legend"));
-      for (const label of labels) {
-        const labelText = (label.textContent ?? "").replace(/\s+/g, " ");
-        if (!isRemarksLabel(labelText)) continue;
-        let el: HTMLTextAreaElement | HTMLInputElement | null = null;
-        if (label.tagName === "DT") {
-          const dd = label.nextElementSibling;
-          if (dd) el = pickInput(dd);
-        }
-        if (!el) {
-          const row = label.closest("tr");
-          if (row) el = pickInput(row);
-        }
-        if (!el) continue;
-        el.focus();
-        el.value = text;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      }
-      return false;
-    }
-
-    const hosts: ParentNode[] = [document];
-    for (const win of Array.from(document.querySelectorAll(".k-window, [role='dialog']"))) {
-      if (!/SALES CUSTOMER ENQUIRY INFO/i.test(win.textContent ?? "")) continue;
-      hosts.push(win);
-      for (const iframe of Array.from(win.querySelectorAll("iframe"))) {
-        try {
-          const doc = (iframe as HTMLIFrameElement).contentDocument;
-          if (doc?.body) hosts.push(doc.body);
-        } catch {
-          /* cross-origin */
-        }
-      }
-    }
-    for (const host of hosts) {
-      if (searchAndFill(host)) return true;
-    }
-    return false;
-  }, remarkText);
-
-  if (ok) {
-    await log("info", `Follow Up Remarks set via DOM fallback ("${remarkText}").`);
-  }
-  return ok;
-}
-
-async function resolveFollowUpRemarksInput(
-  page: Page,
-  modal: Locator,
-  log?: EnquiryTransferContext["log"],
-): Promise<Locator> {
-  for (let attempt = 1; attempt <= 12; attempt++) {
-    await ensureFollowUpTabActive(modal);
-    await humanDelay(500, 900);
-
-    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
-      const found = await tryResolveFollowUpRemarksInRoot(root);
-      if (found) return found;
-    }
-
-    if (log && attempt < 12) {
-      await log("info", `Follow Up Remarks field not ready yet — waiting (attempt ${attempt}/12).`);
-    }
-    await humanDelay(900, 1_600);
-  }
-  throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
-}
-
-async function ensureFollowUpTabOpen(
-  page: Page,
-  modal: Locator,
-  log: EnquiryTransferContext["log"],
-): Promise<Locator> {
-  const formRoot = await enquiryModalFormRoot(modal);
-  for (let attempt = 1; attempt <= 6; attempt++) {
-    await ensureFollowUpTabActive(modal);
-    await pause(attempt === 1 ? "short" : "normal");
-
-    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
-      const remarks = await tryResolveFollowUpRemarksInRoot(root);
-      if (remarks) return formRoot;
-      const typeHint = root
-        .locator("dt, th, td, label, span")
-        .filter({ hasText: /Follow Up Type/i })
-        .first();
-      if (await typeHint.isVisible({ timeout: 1_500 }).catch(() => false)) return formRoot;
-    }
-
-    await log("info", `Follow Up tab still loading — retry open (${attempt}/6).`);
-    await humanDelay(700, 1_200);
-  }
-  return formRoot;
-}
-
-async function fillFollowUpRemarksField(
-  page: Page,
-  modal: Locator,
-  remarkText: string,
-  log: EnquiryTransferContext["log"],
-): Promise<void> {
-  if (await isFollowUpRemarksFilled(page, modal)) {
-    await log("info", "Follow Up Remarks already set (automation suffix) — skipping re-type.");
-    return;
+    await pollDelay(400);
   }
 
-  for (let attempt = 1; attempt <= 12; attempt++) {
-    await ensureFollowUpTabActive(modal);
-    await humanDelay(500, 900);
-
-    for (const root of await enumerateRemarkSearchRoots(page, modal)) {
-      const remarks = await tryResolveFollowUpRemarksInRoot(root);
-      if (!remarks) continue;
-      await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
-      await withModalInputBypass(modal, async () => {
-        await remarks.click();
-        await remarks.fill("");
-        await remarks.pressSequentially(remarkText, { delay: scaledRandomBetween(80, 140) });
-      });
-      await log("info", `Follow Up Remarks set to "${remarkText}" (Scheme Offered left empty).`);
-      await pause("normal");
-      return;
-    }
-
-    if (await fillFollowUpRemarksViaDom(page, remarkText, log)) {
-      await pause("normal");
-      return;
-    }
-
-    if (attempt < 12) {
-      await log("info", `Follow Up Remarks field not ready yet — waiting (attempt ${attempt}/12).`);
-      await humanDelay(900, 1_500);
-    }
-  }
   throw new Error("Follow Up Remarks textarea not found (will not use Scheme Offered or other fields).");
 }
 
@@ -3554,7 +3886,7 @@ async function fillFollowUpRemarksForSkip(
   log: EnquiryTransferContext["log"],
   remarkText: string,
 ): Promise<void> {
-  const remarks = await resolveFollowUpRemarksInput(page, modal, log);
+  const remarks = await resolveFollowUpRemarksInput(formRoot);
   await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
 
   await withModalInputBypass(modal, async () => {
@@ -3593,7 +3925,9 @@ async function setNextFollowUpTime(
   log: EnquiryTransferContext["log"],
 ): Promise<void> {
   const modal = await visibleEnquiryModal(page);
-  const formRoot = await enquiryModalFormRoot(modal);
+  await ensureFollowUpTabPanel(modal, log);
+  const panel = await resolveFollowUpTabPanel(modal);
+  const formRoot = panel;
   const target = nextFollowUpDateIst();
   const { hour } = istDateParts(new Date());
   await log(
@@ -3607,7 +3941,7 @@ async function setNextFollowUpTime(
   await withModalInputBypass(modal, async () => {
     await clickNextFollowUpCalendarTrigger(row, log);
   });
-  await pause("normal");
+  await pause("short");
 
   const picker = await findVisibleDateTimePicker(page);
   await picker.waitFor({ state: "visible", timeout: 4_000 });
@@ -3645,53 +3979,68 @@ async function setNextFollowUpTime(
   await withModalInputBypass(modal, async () => {
     await selectTime930PmInPicker(page, log);
   });
-  await closeDateTimePickerWithoutClosingModal(modal);
+  await closeDateTimePickerWithoutClosingModal(modal, log);
+  await ensureFollowUpTabPanel(modal);
   await pause("short");
 }
 
 async function completeFollowUpTab(page: Page, log: EnquiryTransferContext["log"], ctx: EnquiryTransferContext): Promise<void> {
-  const modal = await visibleEnquiryModal(page);
-  await ensureFollowUpTabOpen(page, modal, log);
+  let modal = await visibleEnquiryModal(page);
+  let panel = await pinFollowUpTab(modal, log);
+  await pause("short");
 
-  if (await isFollowUpTabReadyExceptEnquiryType(page, modal)) {
+  if (await isFollowUpTabReadyExceptEnquiryType(modal)) {
     await followUpEnquiryTypeThenSaveOnly(page, log, ctx);
     return;
   }
 
   await log("info", "Follow Up tab — fill missing fields, Enquiry Type once, then Save.");
-  await pause("normal");
 
   const remarkText = await resolveEnquiryFollowUpRemark(page, ctx);
-  await fillFollowUpRemarksField(page, modal, remarkText, log);
+  panel = await ensureFollowUpTabPanel(modal);
+  if (await isFollowUpRemarksFilled(panel)) {
+    await log("info", `Follow Up Remarks already set (automation suffix) — skipping re-type.`);
+  } else {
+    const remarks = await resolveFollowUpRemarksInput(panel);
+    await remarks.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+    await withModalInputBypass(modal, async () => {
+      await remarks.click();
+      await remarks.fill("");
+      await remarks.pressSequentially(remarkText, { delay: scaledRandomBetween(45, 90) });
+    });
+    await log("info", `Follow Up Remarks set to "${remarkText}" (Scheme Offered left empty).`);
+    await pause("short");
+  }
 
-  const followType = await readDropdownDisplayNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE);
+  panel = await ensureFollowUpTabPanel(modal);
+  const followType = await readDropdownDisplayNearLabelInRoot(panel, FOLLOW_UP_TYPE_LABEL_RE);
   if (/^phone$/i.test(followType.trim())) {
     await log("info", "Follow Up Type already Phone — skipping.");
   } else {
-    await selectDropdownNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE, /^Phone$/i);
-    await pause("normal");
+    await selectFollowUpDropdownNearLabel(modal, FOLLOW_UP_TYPE_LABEL_RE, /^Phone$/i, log);
+    await pause("short");
   }
 
-  const nextType = await readDropdownDisplayNearLabel(modal, /Next Follow Up Type/i);
+  panel = await ensureFollowUpTabPanel(modal);
+  const nextType = await readDropdownDisplayNearLabelInRoot(panel, /Next Follow Up Type/i);
   if (/^phone$/i.test(nextType.trim())) {
     await log("info", "Next Follow Up Type already Phone — skipping.");
   } else {
-    await selectDropdownNearLabel(modal, /Next Follow Up Type/i, /^Phone$/i);
-    await pause("normal");
+    await selectFollowUpDropdownNearLabel(modal, /Next Follow Up Type/i, /^Phone$/i, log);
+    await pause("short");
   }
 
-  await selectMandatoryVerificationY(modal);
-  await pause("normal");
+  await selectMandatoryVerificationY(modal, log);
+  await ensureFollowUpTabPanel(modal);
 
   if (await isNextFollowUpTimeFilled(modal)) {
     await log("info", "Next Follow Up Time already set — skipping calendar.");
   } else {
     await setNextFollowUpTime(page, log);
   }
-  await pause("normal");
 
-  await scrollEnquiryInfoBottomIntoView(modal);
-  await pause("short");
+  modal = await visibleEnquiryModal(page);
+  await ensureFollowUpTabPanel(modal);
 
   await selectEnquiryTypeColdOnce(modal, log);
   await saveFollowUpUntilSuccess(page, log, ctx);
@@ -3728,8 +4077,8 @@ export type FollowUpSkipContext = Pick<
 
 async function readFollowUpSkipDropdownDisplay(modal: Locator, label: RegExp): Promise<string> {
   try {
-    const page = modal.page();
-    const fieldsRoot = await resolveFollowUpFieldsContainer(page, modal);
+    const formRoot = await enquiryModalFormRoot(modal);
+    const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
     const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
     const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
     const display = host.locator("span.k-input, .k-input-value, input[role='combobox'], input").first();
@@ -3749,11 +4098,13 @@ async function openFollowUpSkipKendoDropdownNearLabel(
   label: RegExp,
   log?: EnquiryTransferContext["log"],
 ): Promise<void> {
-  const page = modal.page();
-  const fieldsRoot = await resolveFollowUpFieldsContainer(page, modal);
+  const formRoot = await enquiryModalFormRoot(modal);
+  const fieldsRoot = await resolveFollowUpFieldsContainer(formRoot);
   const trigger = await resolveFollowUpSkipKendoDropdownTriggerNearLabel(fieldsRoot, label);
   await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
   if (log) await log("info", `Opening ${String(label)} dropdown (Follow Up Skip).`);
+
+  const page = modal.page();
   const host = trigger.locator("xpath=ancestor::*[contains(@class,'k-dropdown')][1]");
   const kInput = host.locator("span.k-input").first();
   const kSelect = host.locator("span.k-select").first();
@@ -3850,8 +4201,14 @@ async function selectFollowUpSkipPhoneDropdown(
 }
 
 async function isFollowUpSkipReadyForSave(modal: Locator): Promise<boolean> {
-  const page = modal.page();
-  if (!(await isFollowUpRemarksFilled(page, modal))) return false;
+  const formRoot = await enquiryModalFormRoot(modal);
+  try {
+    const remarks = await resolveFollowUpRemarksInput(formRoot);
+    const t = (await remarks.inputValue().catch(() => "")).trim();
+    if (!isAutomationRemarkFilled(t)) return false;
+  } catch {
+    return false;
+  }
   if (!/^phone$/i.test((await readFollowUpSkipDropdownDisplay(modal, FOLLOW_UP_TYPE_LABEL_RE)).trim())) {
     return false;
   }
@@ -3876,7 +4233,7 @@ async function waitForFollowUpSkipReadyForSave(
     await dismissTransientKendoPopups(page);
     await pollDelay(350);
   }
-  throw new Error(`Follow Up Skip not ready for Save (${await describeFollowUpReadiness(page, modal)}).`);
+  throw new Error(`Follow Up Skip not ready for Save (${await describeFollowUpReadiness(modal)}).`);
 }
 
 async function setNextFollowUpTimeForSkip(
@@ -3931,7 +4288,7 @@ async function setNextFollowUpTimeForSkip(
   await withModalInputBypass(modal, async () => {
     await selectTime930PmInPicker(page, log);
   });
-  await closeDateTimePickerWithoutClosingModal(modal);
+  await closeDateTimePickerWithoutClosingModal(modal, log);
   await pause("short");
 }
 
@@ -3998,7 +4355,7 @@ async function saveFollowUpSkipUntilSuccess(
     try {
       await withPageInputBypass(page, async () => {
         modal = await ensureEnquiryModalOpenForFollowUpSave(page, log);
-        await closeDateTimePickerWithoutClosingModal(modal);
+        await closeDateTimePickerWithoutClosingModal(modal, log);
         await dismissTransientKendoPopups(page);
         await scrollFollowUpSaveIntoView(page);
         await clickBtnFollowUpSave(page, log);
@@ -4007,10 +4364,7 @@ async function saveFollowUpSkipUntilSuccess(
       if (!isPlaywrightDetachError(err)) throw err;
       await log("warn", `Follow Up Save attempt ${attempt} — frame detached; checking CRM state.`);
     }
-    await humanDelay(
-      env.GDMS_SAVE_RETRY_INTERVAL_MS,
-      env.GDMS_SAVE_RETRY_INTERVAL_MS + scaleMs(2800),
-    );
+    await saveClickSettleDelay();
     if (await confirmFollowUpSkipSaveSucceeded(page, log)) {
       await log("info", "Follow Up Save succeeded (skip flow).");
       return;
@@ -4035,9 +4389,29 @@ async function confirmFollowUpSkipSaveSucceeded(
       await log("info", "Follow Up Save — modal closed; Today's Follow Up list visible.");
       return true;
     }
-    await pollDelay(350);
+    await pollDelay(250);
   }
   return false;
+}
+
+async function recordSuccessfulEnquiryTransfer(
+  ctx: EnquiryTransferContext,
+  detailPage: Page,
+): Promise<void> {
+  await incrementRunMetric(prisma, ctx.runId, "processed").catch(() => undefined);
+  const label =
+    ctx.lastAssignedConsultant?.trim() ||
+    (await readSalesConsultantFromEnquiryModal(detailPage).catch(() => null))?.trim() ||
+    "";
+  if (!label || !ctx.startedByUserId) return;
+  await recordAutomationStatEvent(prisma, {
+    dealerId: ctx.dealerId,
+    workflowRunId: ctx.runId,
+    operation: "enquiry_transfer",
+    startedByUserId: ctx.startedByUserId,
+    salesConsultantLabel: label,
+    teamLeaderUserId: ctx.rotation?.teamLeaderUserId ?? null,
+  }).catch(() => undefined);
 }
 
 async function processOneTransfer(
@@ -4052,6 +4426,13 @@ async function processOneTransfer(
 
   mainModal = await ensurePinOnEnquiryModal(detailPage, log);
   await mainModal.waitFor({ state: "visible", timeout: 5_000 });
+
+  if (await isFollowUpTabReallyActive(mainModal)) {
+    await log("info", "Follow Up tab already open — skipping Basic Info save, continuing Follow Up.");
+    await completeFollowUpTab(detailPage, log, ctx);
+    await log("info", "Enquiry transfer cycle completed.");
+    return;
+  }
 
   const basicAlreadySaved = await isBasicInfoTransferFieldsFilled(mainModal);
   if (basicAlreadySaved) {
@@ -4081,7 +4462,18 @@ async function processOneTransfer(
 }
 
 export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<void> {
-  const { page: listPage, sources, subSources, log } = ctx;
+  const { page: listPage, sources, subSources, log, redis, runId } = ctx;
+
+  let lockHeld = false;
+  if (redis) {
+    lockHeld = await tryAcquireTransferLock(redis, runId);
+    if (!lockHeld) {
+      await log("info", "Enquiry transfer already running on this session — skipping duplicate loop.");
+      return;
+    }
+  }
+
+  try {
   await applyInputGuardToPage(listPage);
   const criteria = buildCriteria(sources, subSources);
 
@@ -4115,8 +4507,7 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
   );
 
   while (true) {
-    if (await ctx.shouldStop()) throw new Error("stopped");
-    await ctx.waitIfPaused();
+    await automationCheckpoint(ctx, log);
 
     if (!(await isOnCustomerEnquiryList(listPage))) {
       await navigateToCustomerEnquiry(listPage, log, ctx.runId);
@@ -4135,8 +4526,9 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
           transferCompleted = true;
         } finally {
           if (transferCompleted) {
+            await recordSuccessfulEnquiryTransfer(ctx, listPage);
             await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, listPage, listPage);
-            await humanDelay(800, 1800);
+            await humanDelay(400, 900);
             await ensureListPageForPolling(listPage, log);
           }
         }
@@ -4169,11 +4561,563 @@ export async function runEnquiryTransfer(ctx: EnquiryTransferContext): Promise<v
       transferCompleted = true;
     } finally {
       if (transferCompleted) {
-        await incrementRunMetric(prisma, ctx.runId, "processed").catch(() => undefined);
+        await recordSuccessfulEnquiryTransfer(ctx, detailPage);
         await waitUntilEnquirySurfaceClosedAfterTransfer(ctx, detailPage, listPage);
-        await humanDelay(800, 1800);
+        await humanDelay(400, 900);
         await ensureListPageForPolling(listPage, log);
       }
     }
   }
+  } finally {
+    if (lockHeld && redis) {
+      await releaseTransferLock(redis, runId);
+    }
+  }
+}
+
+async function openKendoDropdownByTrigger(
+  modal: Locator,
+  trigger: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await trigger.scrollIntoViewIfNeeded({ timeout: 4_000 }).catch(() => {});
+  if (log) await log("info", "Opening Kendo dropdown (trigger click).");
+
+  const tryOpen = async (): Promise<boolean> => {
+    if (await kendoListPopupVisible(modal.page())) return true;
+    await humanHoverClick(trigger);
+    await microDelay();
+    await humanDelay(500, 1_100);
+    if (await kendoListPopupVisible(modal.page())) return true;
+    await tryOpenKendoWidgetViaDom(trigger);
+    await humanDelay(400, 900);
+    return kendoListPopupVisible(modal.page());
+  };
+
+  if (!(await tryOpen())) {
+    throw new Error("Kendo list did not open after clicking dropdown trigger.");
+  }
+}
+
+async function collectOpenKendoListOptions(modal: Locator): Promise<string[]> {
+  const page = modal.page();
+  const formRoot = await enquiryModalFormRoot(modal).catch(() => null);
+  const roots = formRoot ? [formRoot, ...listUiContexts(page)] : listUiContexts(page);
+  const itemSel =
+    ".k-list-container:visible .k-list-item, .k-popup:visible .k-list-item, .k-animation-container:visible .k-list-item, .k-list-ul:visible .k-item, .k-list:visible .k-item, ul.k-list:visible li, [role='listbox']:visible [role='option']";
+  const options: string[] = [];
+  const deadline = Date.now() + 4_500;
+  while (Date.now() < deadline) {
+    options.length = 0;
+    for (const root of roots) {
+      const items = root.locator(itemSel);
+      const n = await items.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        const text = (await items.nth(i).innerText().catch(() => "")).trim().split(/\n/)[0]?.trim();
+        if (!text || /^select$/i.test(text)) continue;
+        if (!options.some((o) => o.toLowerCase() === text.toLowerCase())) options.push(text);
+      }
+    }
+    if (options.length > 0) break;
+    await pollDelay(250);
+  }
+  return options;
+}
+
+async function clickOptionInOpenKendoList(formRoot: Locator, option: string): Promise<void> {
+  const exactRe = new RegExp(`^${escapeRegExp(option)}$`, "i");
+  const partialRe = new RegExp(escapeRegExp(option), "i");
+  for (const re of [exactRe, partialRe]) {
+    try {
+      await clickOptionInFormRoot(formRoot, re);
+      return;
+    } catch {
+      /* try partial next */
+    }
+  }
+  throw new Error(`Dropdown option not found in open list: "${option}"`);
+}
+
+async function selectKendoDropdownByTrigger(
+  modal: Locator,
+  trigger: Locator,
+  option: string,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await withModalInputBypass(modal, async () => {
+    await openKendoDropdownByTrigger(modal, trigger, log);
+    const formRoot = await enquiryModalFormRoot(modal);
+    await clickOptionInOpenKendoList(formRoot, option);
+    await humanDelay();
+    await dismissTransientKendoPopups(modal.page());
+  });
+}
+
+export async function gdmsSelectKendoDropdownByTriggerWithFallback(
+  modal: Locator,
+  trigger: Locator,
+  candidates: string[],
+  log?: EnquiryTransferContext["log"],
+): Promise<string> {
+  const tried = new Set<string>();
+  for (const raw of candidates) {
+    const option = raw.trim();
+    if (!option || tried.has(option.toLowerCase())) continue;
+    tried.add(option.toLowerCase());
+    try {
+      await selectKendoDropdownByTrigger(modal, trigger, option, log);
+      return option;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (log) await log("warn", `Dropdown select failed for "${option}": ${msg}`);
+    }
+  }
+  throw new Error(`Could not select any of: ${candidates.slice(0, 5).join(", ")}`);
+}
+
+async function scrapeKendoDropdownByTrigger(
+  modal: Locator,
+  trigger: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<string[]> {
+  let options: string[] = [];
+  await withModalInputBypass(modal, async () => {
+    await openKendoDropdownByTrigger(modal, trigger, log);
+    options = await collectOpenKendoListOptions(modal);
+    if (log) {
+      if (options.length > 0) {
+        await log("info", `Dropdown trigger: scraped ${options.length} option(s).`);
+      } else {
+        await log("warn", "Dropdown trigger: list opened but no options found.");
+      }
+    }
+    await dismissTransientKendoPopups(modal.page());
+  });
+  return options;
+}
+
+async function listVisibleKendoTriggersLeftToRight(container: Locator): Promise<Locator[]> {
+  const triggers = container.locator("span.k-select, .k-dropdown-wrap, .k-widget.k-dropdown, .k-picker");
+  const n = await triggers.count().catch(() => 0);
+  const ranked: { idx: number; left: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const trigger = triggers.nth(i);
+    if (!(await trigger.isVisible({ timeout: 500 }).catch(() => false))) continue;
+    const left = await trigger.evaluate((el) => el.getBoundingClientRect().left).catch(() => i * 1_000);
+    ranked.push({ idx: i, left });
+  }
+  ranked.sort((a, b) => a.left - b.left);
+  return ranked.map(({ idx }) => triggers.nth(idx));
+}
+
+async function firstKendoTriggerIn(container: Locator): Promise<Locator | null> {
+  const triggers = await listVisibleKendoTriggersLeftToRight(container);
+  return triggers[0] ?? null;
+}
+
+export async function gdmsResolveLostDueToPairDropdowns(
+  modal: Locator,
+): Promise<{ parent: Locator; sub: Locator | null }> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const labelEls = formRoot.locator("dt, th, td, label").filter({ hasText: /\*?\s*lost\s*due\s*to/i });
+  const n = await labelEls.count().catch(() => 0);
+
+  for (let i = 0; i < n; i++) {
+    const labelEl = labelEls.nth(i);
+    if (!(await labelEl.isVisible({ timeout: 600 }).catch(() => false))) continue;
+    const raw = normalizeFollowUpFieldLabel(await labelEl.innerText().catch(() => ""));
+    if (!/lost\s*due\s*to/i.test(raw)) continue;
+    if (/sub|detail|category/i.test(raw)) continue;
+
+    const tag = ((await labelEl.evaluate((el) => el.tagName).catch(() => "")) ?? "").toLowerCase();
+    if (tag === "dt") {
+      const dd1 = labelEl.locator("xpath=following-sibling::dd[1]");
+      const dd2 = labelEl.locator("xpath=following-sibling::dd[2]");
+      const parent = await firstKendoTriggerIn(dd1);
+      const sub = await firstKendoTriggerIn(dd2);
+      if (parent) return { parent, sub };
+    }
+
+    const row = labelEl.locator("xpath=ancestor::tr[1]");
+    if ((await row.count().catch(() => 0)) > 0 && (await row.isVisible({ timeout: 800 }).catch(() => false))) {
+      const labelBox = await labelEl.boundingBox().catch(() => null);
+      const triggers = await listVisibleKendoTriggersLeftToRight(row);
+      const afterLabel: Locator[] = [];
+      for (const trigger of triggers) {
+        const box = await trigger.boundingBox().catch(() => null);
+        if (!labelBox || !box) {
+          afterLabel.push(trigger);
+          continue;
+        }
+        if (box.x >= labelBox.x - 8) afterLabel.push(trigger);
+      }
+      if (afterLabel.length >= 2) return { parent: afterLabel[0]!, sub: afterLabel[1]! };
+      if (afterLabel.length === 1) return { parent: afterLabel[0]!, sub: null };
+      if (triggers.length >= 2) {
+        return { parent: triggers[triggers.length - 2]!, sub: triggers[triggers.length - 1]! };
+      }
+      if (triggers.length === 1) return { parent: triggers[0]!, sub: null };
+    }
+  }
+
+  throw new Error("Lost due to dropdown triggers not found in Cancelation Info.");
+}
+
+export async function gdmsScrapeKendoDropdownByTrigger(
+  modal: Locator,
+  trigger: Locator,
+  log?: EnquiryTransferContext["log"],
+): Promise<string[]> {
+  return scrapeKendoDropdownByTrigger(modal, trigger, log);
+}
+
+export async function gdmsSelectKendoDropdownByTrigger(
+  modal: Locator,
+  trigger: Locator,
+  option: string,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await selectKendoDropdownByTrigger(modal, trigger, option, log);
+}
+// --- Lost Inquiry exports (GDMS modal / form helpers) ---
+
+export async function gdmsClickEnquiryTab(
+  modal: Locator,
+  tabRe: RegExp,
+  _log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const tab = formRoot.getByText(tabRe).first();
+  if (await tab.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await humanHoverClick(tab);
+    await humanDelay(400, 800);
+  }
+}
+
+export async function gdmsSelectKendoDropdown(
+  modal: Locator,
+  label: RegExp,
+  option: string,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  await selectDropdownInFormRoot(modal, label, option, log);
+}
+
+export async function gdmsScrapeKendoDropdownOptions(
+  modal: Locator,
+  label: RegExp,
+  log?: EnquiryTransferContext["log"],
+): Promise<string[]> {
+  const options: string[] = [];
+  await withModalInputBypass(modal, async () => {
+    await openKendoDropdownNearLabel(modal, label, log);
+    options.push(...(await collectOpenKendoListOptions(modal)));
+    if (log) {
+      if (options.length > 0) {
+        await log("info", `Dropdown ${String(label)}: scraped ${options.length} option(s).`);
+      } else {
+        await log("warn", `Dropdown ${String(label)}: list opened but no options found.`);
+      }
+    }
+    await dismissTransientKendoPopups(modal.page());
+  });
+  return options;
+}
+
+export async function gdmsScrollKendoFieldIntoView(modal: Locator, label: RegExp): Promise<void> {
+  await scrollKendoFieldIntoView(modal, label);
+}
+
+export async function gdmsFillTextareaNearLabel(
+  modal: Locator,
+  label: RegExp,
+  value: string,
+): Promise<void> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const labelEl = formRoot.locator("dt, th, td, label").filter({ hasText: label }).first();
+  await labelEl.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+  const container = labelEl.locator("xpath=ancestor::tr[1] | ancestor::dl[1]");
+  const input = container.locator("textarea, input:not([type='hidden'])").first();
+  await input.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+  await withModalInputBypass(modal, async () => {
+    await input.click({ timeout: 5_000 }).catch(() => undefined);
+    await input.fill(value, { timeout: 8_000 });
+  });
+}
+
+function isCancelationRemarkLabel(text: string): boolean {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (/\*?\s*follow\s*up\s*remarks/i.test(t)) return false;
+  if (/reason\s*failure|lost\s*due\s*to|reason\s*for|scheme\s*offered/i.test(t)) return false;
+  return /^\*?\s*remark\s*$/i.test(t);
+}
+
+async function resolveCancelationInfoRoot(formRoot: Locator): Promise<Locator> {
+  const heading = formRoot.getByText(/^Cancelation Info|^Cancellation Info$/i).first();
+  if (await heading.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    const block = heading.locator(
+      "xpath=ancestor::div[contains(@class,'box') or contains(@class,'form') or contains(@class,'section')][1]",
+    );
+    if (await block.isVisible({ timeout: 800 }).catch(() => false)) return block;
+    const dl = heading.locator("xpath=ancestor::dl[1]");
+    if (await dl.isVisible({ timeout: 800 }).catch(() => false)) return dl;
+  }
+  return formRoot
+    .locator("div, section, fieldset, dl")
+    .filter({ hasText: /Cancelation Info|Cancellation Info/i })
+    .last();
+}
+
+async function fillCancelationRemarkInput(
+  modal: Locator,
+  input: Locator,
+  value: string,
+): Promise<void> {
+  await input.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+  await withModalInputBypass(modal, async () => {
+    await input.click({ timeout: 5_000 }).catch(() => undefined);
+    await input.fill("").catch(() => undefined);
+    try {
+      await input.fill(value, { timeout: 8_000 });
+    } catch {
+      await input.pressSequentially(value, { delay: scaledRandomBetween(40, 90) });
+    }
+  });
+}
+
+async function fillCancelationRemarkViaDom(
+  page: Page,
+  value: string,
+  log?: EnquiryTransferContext["log"],
+): Promise<boolean> {
+  const ok = await page.evaluate((text) => {
+    const norm = (t: string) => t.replace(/\s+/g, " ").replace(/\*/g, "").trim();
+    const isRemarkLabel = (t: string) => /^remark$/i.test(norm(t));
+    const isFollowUpRemarks = (t: string) => /\*?\s*follow\s*up\s*remarks/i.test(t.replace(/\s+/g, " "));
+
+    function pickInput(container: Element): HTMLTextAreaElement | HTMLInputElement | null {
+      for (const el of Array.from(container.querySelectorAll("textarea, input[type='text']"))) {
+        if (!(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) continue;
+        if (el.disabled || el.readOnly) continue;
+        if (el.closest(".k-grid, [data-role='grid'], table.k-selectable")) continue;
+        return el;
+      }
+      return null;
+    }
+
+    function inputNearRemarkLabel(label: Element): HTMLTextAreaElement | HTMLInputElement | null {
+      if (label.tagName === "DT") {
+        const dd = label.nextElementSibling;
+        if (dd) {
+          const el = pickInput(dd);
+          if (el) return el;
+        }
+      }
+      let sib: Element | null = label.nextElementSibling;
+      while (sib) {
+        const el = pickInput(sib);
+        if (el) return el;
+        sib = sib.nextElementSibling;
+      }
+      const row = label.closest("tr");
+      if (row) {
+        const tas = Array.from(row.querySelectorAll("textarea, input[type='text']")).filter(
+          (el): el is HTMLTextAreaElement | HTMLInputElement =>
+            el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement,
+        );
+        if (tas.length > 0) return tas[tas.length - 1]!;
+      }
+      const parent = label.parentElement;
+      if (parent) {
+        const el = pickInput(parent);
+        if (el) return el;
+      }
+      return null;
+    }
+
+    function searchAndFill(root: ParentNode): boolean {
+      const labels = Array.from(root.querySelectorAll("dt, th, td, label, span"));
+      for (const label of labels) {
+        const labelText = (label.textContent ?? "").replace(/\s+/g, " ");
+        if (isFollowUpRemarks(labelText)) continue;
+        if (!isRemarkLabel(labelText)) continue;
+        const ctx = (label.closest("tr, dl, div, section")?.textContent ?? "").replace(/\s+/g, " ");
+        if (/follow\s*up\s*history|follow\s*up\s*remarks/i.test(ctx) && !/cancelation info|cancellation info/i.test(ctx)) {
+          continue;
+        }
+        const el = inputNearRemarkLabel(label);
+        if (!el) continue;
+        el.focus();
+        el.value = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+      return false;
+    }
+
+    const hosts: ParentNode[] = [document];
+    for (const win of Array.from(document.querySelectorAll(".k-window, [role='dialog']"))) {
+      if (!/SALES CUSTOMER ENQUIRY INFO/i.test(win.textContent ?? "")) continue;
+      hosts.push(win);
+      for (const iframe of Array.from(win.querySelectorAll("iframe"))) {
+        try {
+          const doc = (iframe as HTMLIFrameElement).contentDocument;
+          if (doc?.body) hosts.push(doc.body);
+        } catch {
+          /* cross-origin */
+        }
+      }
+    }
+    for (const host of hosts) {
+      if (searchAndFill(host)) return true;
+    }
+    return false;
+  }, value);
+
+  if (ok && log) await log("info", "Cancelation Remark filled (DOM fallback).");
+  return ok;
+}
+
+async function tryFillRemarkAtLabel(
+  modal: Locator,
+  labelEl: Locator,
+  value: string,
+  log?: EnquiryTransferContext["log"],
+  source?: string,
+): Promise<boolean> {
+  const tag = ((await labelEl.evaluate((el) => el.tagName).catch(() => "")) ?? "").toLowerCase();
+
+  if (tag === "dt") {
+    const dd = labelEl.locator("xpath=following-sibling::dd[1]");
+    const input = dd.locator("textarea, input[type='text']").first();
+    if (await input.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await fillCancelationRemarkInput(modal, input, value);
+      if (log) await log("info", `Cancelation Remark filled (${source ?? "Remark label"} / dt-dd).`);
+      return true;
+    }
+  }
+
+  if (tag === "td" || tag === "th") {
+    const sibling = labelEl.locator("xpath=following-sibling::td[1] | following-sibling::dd[1]");
+    const input = sibling.locator("textarea, input[type='text']").first();
+    if (await input.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await fillCancelationRemarkInput(modal, input, value);
+      if (log) await log("info", `Cancelation Remark filled (${source ?? "Remark label"} / sibling cell).`);
+      return true;
+    }
+  }
+
+  const row = labelEl.locator("xpath=ancestor::tr[1]");
+  if ((await row.count().catch(() => 0)) > 0) {
+    const input = row.locator("textarea, input[type='text']").last();
+    if (await input.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await fillCancelationRemarkInput(modal, input, value);
+      if (log) await log("info", `Cancelation Remark filled (${source ?? "Remark label"} / row).`);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Cancelation Info * Remark — labeled field below Lost due to dropdowns (not Follow Up Remarks). */
+export async function gdmsFillCancelationRemark(
+  modal: Locator,
+  value: string,
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const page = modal.page();
+  await dismissTransientKendoPopups(page);
+  await humanDelay(350, 650);
+
+  const formRoot = await enquiryModalFormRoot(modal);
+  await gdmsScrollModalToText(modal, /cancelation\s*info/i);
+  await gdmsScrollModalToText(modal, /^remark$/i);
+
+  const searchScopes = [formRoot, modal.locator(".k-window-content").first(), modal];
+  for (const scope of searchScopes) {
+    const remarkLabels = scope.locator("dt, th, td, label, span").filter({ hasText: /^(\*?\s*)?remark\s*$/i });
+    const n = await remarkLabels.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const labelEl = remarkLabels.nth(i);
+      if (!(await labelEl.isVisible({ timeout: 600 }).catch(() => false))) continue;
+      const raw = normalizeFollowUpFieldLabel(await labelEl.innerText().catch(() => ""));
+      if (!isCancelationRemarkLabel(raw)) continue;
+      if (await tryFillRemarkAtLabel(modal, labelEl, value, log, "form scope")) return;
+    }
+  }
+
+  if (await fillCancelationRemarkViaDom(page, value, log)) return;
+
+  const cancelRoot = await resolveCancelationInfoRoot(formRoot);
+  const visibleInputs = cancelRoot.locator("textarea:visible, input[type='text']:visible");
+  const count = await visibleInputs.count().catch(() => 0);
+  for (let i = count - 1; i >= 0; i--) {
+    const input = visibleInputs.nth(i);
+    const ctx = ((await input.evaluate((el) => el.closest("dl, tr, div")?.textContent ?? "").catch(() => "")) ?? "")
+      .replace(/\s+/g, " ");
+    if (/follow\s*up\s*remarks|scheme\s*offered|reason\s*failure/i.test(ctx)) continue;
+    await fillCancelationRemarkInput(modal, input, value);
+    if (log) await log("info", "Cancelation Remark filled (Cancelation Info textarea).");
+    return;
+  }
+
+  throw new Error("Cancelation Remark textarea not found — look for Remark label in Cancelation Info.");
+}
+
+export async function gdmsScrollModalToText(modal: Locator, textRe: RegExp): Promise<void> {
+  const formRoot = await enquiryModalFormRoot(modal);
+  const anchor = formRoot.getByText(textRe).first();
+  await anchor.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(() => {});
+  await humanDelay(300, 600);
+}
+
+export async function gdmsPickKendoCalendarDate(
+  page: Page,
+  target: { day: number; month: number; year: number },
+  log?: EnquiryTransferContext["log"],
+): Promise<void> {
+  const picker = await findVisibleDateTimePicker(page);
+  const calendar = picker.locator(".k-calendar").first();
+  const calendarRoot = (await calendar.isVisible().catch(() => false)) ? calendar : picker;
+  await navigateCalendarToDate(calendarRoot, target);
+  const dayCell = calendarRoot
+    .locator("td:not(.k-other-month)")
+    .filter({ hasText: new RegExp(`^${target.day}$`) })
+    .first();
+  await dayCell.click({ timeout: 5_000 });
+  await humanDelay(300, 600);
+  if (log) {
+    await log("info", `Calendar date picked: ${target.day}/${target.month}/${target.year}.`);
+  }
+}
+
+export async function gdmsOpenListPageDatePickerNearLabel(
+  ui: import("./gdms-session-watch.js").GdmsUiRoot,
+  labelRe: RegExp,
+  which: "from" | "to",
+): Promise<void> {
+  const label = ui.locator("dt, th, td, label, span").filter({ hasText: labelRe }).first();
+  await label.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
+  const container = label.locator(
+    "xpath=ancestor::tr[1] | ancestor::dl[1] | ancestor::div[contains(@class,'form') or contains(@class,'search')][1]",
+  );
+  const pickers = container.locator(
+    ".k-datepicker, .k-datetimepicker, span.k-datepicker, span.k-datetimepicker",
+  );
+  const picker = which === "to" ? pickers.last() : pickers.first();
+  const calBtn = picker
+    .locator(".k-select, .k-input-button, [aria-label*='calendar' i], .k-icon-calendar")
+    .first();
+  await calBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await humanHoverClick(calBtn);
+  await humanDelay(400, 900);
+}
+
+export async function gdmsVisibleEnquiryModal(page: Page, _opts?: { fast?: boolean }): Promise<Locator> {
+  return visibleEnquiryModal(page);
+}
+
+export async function gdmsEnquiryModalFormRoot(modal: Locator): Promise<Locator> {
+  return enquiryModalFormRoot(modal);
 }

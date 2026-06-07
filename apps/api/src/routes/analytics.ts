@@ -1,9 +1,59 @@
 import type { FastifyInstance } from "fastify";
 import { authPreHandler } from "../lib/auth-pre.js";
 import { prisma } from "../prisma.js";
-import { canAccessDealer, canManageDealerUsers } from "@gdms/auth";
+import {
+  canAccessDealer,
+  canManageDealerUsers,
+  canViewAutomationStats,
+} from "@gdms/auth";
+import { automationStatsQuerySchema } from "@gdms/shared";
+import { queryAutomationStats } from "../lib/automation-stats-query.js";
 
 export async function registerAnalyticsRoutes(app: FastifyInstance): Promise<void> {
+  app.get(
+    "/v1/analytics/automation",
+    { preHandler: authPreHandler },
+    async (req, reply) => {
+      const role = req.user!.role;
+      if (!canViewAutomationStats(role)) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
+      const parsed = automationStatsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+
+      const { dealerId, range, from, to } = parsed.data;
+
+      if (role !== "SUPER_ADMIN") {
+        const targetDealer = dealerId ?? req.user!.dealerId;
+        if (!targetDealer || !canAccessDealer(req.user!.dealerId, targetDealer, role)) {
+          return reply.code(403).send({ error: "Forbidden" });
+        }
+      } else if (dealerId && !canAccessDealer(req.user!.dealerId, dealerId, role)) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+
+      const result = await queryAutomationStats(
+        prisma,
+        {
+          sub: req.user!.sub,
+          role: req.user!.role,
+          dealerId: req.user!.dealerId,
+        },
+        {
+          dealerId: dealerId ?? (role === "SUPER_ADMIN" ? undefined : req.user!.dealerId ?? undefined),
+          range,
+          from,
+          to,
+        },
+      );
+
+      return result;
+    },
+  );
+
   app.get<{ Params: { dealerId: string } }>(
     "/v1/dealers/:dealerId/analytics",
     { preHandler: authPreHandler },

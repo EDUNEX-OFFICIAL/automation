@@ -23,7 +23,12 @@ import {
   enqueueScheduledFollowUpSkip,
   triggerFollowUpSkipIfDueNow,
 } from "../lib/follow-up-skip-scheduler.js";
-import { stopFollowUpSkipRunsForDealer } from "../lib/stop-workflow-run.js";
+import {
+  clearLostInquirySchedulerKeys,
+  enqueueScheduledLostInquiry,
+  triggerLostInquiryIfDueNow,
+} from "../lib/lost-inquiry-scheduler.js";
+import { stopFollowUpSkipRunsForDealer, stopLostInquiryRunsForDealer } from "../lib/stop-workflow-run.js";
 import { writeAuditEvent } from "../lib/audit.js";
 
 function parseEnquiryRemarkRulesJson(raw: unknown): EnquiryRemarkRule[] {
@@ -57,6 +62,8 @@ function toSettingsResponse(
     ollamaModel?: string | null;
     enquiryTransferEnabled?: boolean;
     enquiryTransferStartTime?: string | null;
+    lostInquiryEnabled?: boolean;
+    lostInquiryStartTime?: string | null;
     lastScheduledRunId?: string | null;
     lastScheduledRunAt?: Date | null;
   } | null,
@@ -72,6 +79,8 @@ function toSettingsResponse(
     ollamaModel: row?.ollamaModel ?? null,
     enquiryTransferEnabled: row?.enquiryTransferEnabled ?? false,
     enquiryTransferStartTime: row?.enquiryTransferStartTime ?? null,
+    lostInquiryEnabled: row?.lostInquiryEnabled ?? false,
+    lostInquiryStartTime: row?.lostInquiryStartTime ?? null,
     lastScheduledRunId: row?.lastScheduledRunId ?? null,
     lastScheduledRunAt: row?.lastScheduledRunAt?.toISOString() ?? null,
   };
@@ -123,7 +132,27 @@ export async function registerDealerAutomationSettingsRoutes(app: FastifyInstanc
       return reply.code(403).send({ error: "Forbidden" });
     }
 
+    const query = z
+      .object({ operation: z.enum(["follow_up_skip", "lost_inquiry"]).optional() })
+      .parse(req.query ?? {});
+    const operation = query.operation ?? "follow_up_skip";
+
     const row = await prisma.dealerAutomationSettings.findUnique({ where: { dealerId } });
+
+    if (operation === "lost_inquiry") {
+      if (!row?.lostInquiryEnabled || !row.lostInquiryStartTime) {
+        return reply
+          .code(409)
+          .send({ error: "Enable Lost Inquiry and set a Saturday time in Settings first." });
+      }
+      await clearLostInquirySchedulerKeys(dealerId);
+      const result = await enqueueScheduledLostInquiry(dealerId, row.lostInquiryStartTime);
+      if (!result.ok) {
+        return reply.code(409).send({ error: result.reason });
+      }
+      return { ok: true, runId: result.runId, alreadyRunning: result.alreadyRunning ?? false };
+    }
+
     if (!row?.followUpSkipEnabled || !row.followUpSkipStartTime) {
       return reply.code(409).send({ error: "Enable Follow Up Skip and set a daily time in Settings first." });
     }
@@ -164,6 +193,9 @@ export async function registerDealerAutomationSettingsRoutes(app: FastifyInstanc
       enquiryTransferEnabled: normalized.enquiryTransferEnabled ?? prev?.enquiryTransferEnabled ?? false,
       enquiryTransferStartTime:
         normalized.enquiryTransferStartTime ?? prev?.enquiryTransferStartTime ?? null,
+      lostInquiryEnabled: normalized.lostInquiryEnabled ?? prev?.lostInquiryEnabled ?? false,
+      lostInquiryStartTime:
+        normalized.lostInquiryStartTime ?? prev?.lostInquiryStartTime ?? null,
     };
 
     let remarkFields: {
@@ -211,14 +243,22 @@ export async function registerDealerAutomationSettingsRoutes(app: FastifyInstanc
       payload: {
         followUpSkipEnabled: row.followUpSkipEnabled,
         enquiryTransferEnabled: row.enquiryTransferEnabled,
+        lostInquiryEnabled: row.lostInquiryEnabled,
       },
     });
 
-    const scheduleChanged =
+    const fusScheduleChanged =
       prev?.followUpSkipStartTime !== row.followUpSkipStartTime ||
       prev?.followUpSkipEnabled !== row.followUpSkipEnabled;
-    if (scheduleChanged) {
+    if (fusScheduleChanged) {
       await clearFollowUpSkipSchedulerKeys(dealerId);
+    }
+
+    const liScheduleChanged =
+      prev?.lostInquiryStartTime !== row.lostInquiryStartTime ||
+      prev?.lostInquiryEnabled !== row.lostInquiryEnabled;
+    if (liScheduleChanged) {
+      await clearLostInquirySchedulerKeys(dealerId);
     }
 
     let triggeredRunId: string | undefined;
@@ -232,12 +272,29 @@ export async function registerDealerAutomationSettingsRoutes(app: FastifyInstanc
         });
       }
     }
+    if (!triggeredRunId && row.lostInquiryEnabled && row.lostInquiryStartTime) {
+      const immediateLi = await triggerLostInquiryIfDueNow(dealerId, row.lostInquiryStartTime);
+      if (immediateLi?.ok && immediateLi.runId && !immediateLi.alreadyRunning) {
+        triggeredRunId = immediateLi.runId;
+        await prisma.dealerAutomationSettings.update({
+          where: { dealerId },
+          data: { lastScheduledRunId: immediateLi.runId, lastScheduledRunAt: new Date() },
+        });
+      }
+    }
 
     let stoppedRunIds: string[] = [];
     if (!body.followUpSkipEnabled) {
       stoppedRunIds = await stopFollowUpSkipRunsForDealer(dealerId);
       if (stoppedRunIds.length > 0) {
         req.log.info({ dealerId, stoppedRunIds }, "follow_up_skip force-stopped after settings toggle off");
+      }
+    }
+    if (!body.lostInquiryEnabled) {
+      const liStopped = await stopLostInquiryRunsForDealer(dealerId);
+      stoppedRunIds = [...stoppedRunIds, ...liStopped];
+      if (liStopped.length > 0) {
+        req.log.info({ dealerId, stoppedRunIds: liStopped }, "lost_inquiry force-stopped after settings toggle off");
       }
     }
 

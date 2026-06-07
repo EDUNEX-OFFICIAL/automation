@@ -10,10 +10,13 @@ type PageHeaderProps = {
 };
 
 export function PageHeader({ title, description, actions, eyebrow, className }: PageHeaderProps) {
+  const hideOnMobile = !description && !actions;
+
   return (
     <header
       className={cn(
         "flex flex-col gap-4 border-b border-border/60 pb-6 sm:flex-row sm:items-start sm:justify-between",
+        hideOnMobile && "max-lg:hidden",
         className,
       )}
     >
@@ -29,7 +32,9 @@ export function PageHeader({ title, description, actions, eyebrow, className }: 
         ) : null}
       </div>
       {actions ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+        <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto">
+          {actions}
+        </div>
       ) : null}
     </header>
   );

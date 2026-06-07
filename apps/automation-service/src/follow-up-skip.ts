@@ -1,6 +1,8 @@
 import type { Redis } from "ioredis";
 import type { Locator, Page } from "playwright";
+import { createPrisma } from "@gdms/database";
 import { applyInputGuardToPage, setAutomationInputBypass } from "./automation-browser-setup.js";
+import { recordAutomationStatEvent } from "./automation-stat-events.js";
 import {
   closeVisibleEnquiryModal,
   completeFollowUpTabForSkip,
@@ -8,6 +10,11 @@ import {
   openEnquiryDetailPage,
   type FollowUpSkipContext,
 } from "./enquiry-transfer.js";
+import {
+  loadFollowUpSkipScLabels,
+  readSalesConsultantFromFollowUpRow,
+  resolveKnownScLabel,
+} from "./follow-up-sc-label.js";
 import {
   clearGdmsUiRootCache,
   clickBookingRetailFlyoutMgt,
@@ -23,14 +30,20 @@ import {
 import {
   humanDelay,
   pollDelay,
+  scaleMs,
 } from "./human-delay.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
+import { incrementRunMetric } from "./run-metrics.js";
+
+const prisma = createPrisma();
 
 export type FollowUpSkipRunContext = FollowUpSkipContext & {
   page: Page;
   runId: string;
   dealerId: string;
+  startedByUserId?: string;
   redis: Redis;
+  ollamaModel?: string | null;
 };
 
 function listUiContexts(page: Page): GdmsUiRoot[] {
@@ -46,7 +59,7 @@ function listUiContexts(page: Page): GdmsUiRoot[] {
   return contexts;
 }
 
-async function resolveListPageUi(page: Page): Promise<GdmsUiRoot> {
+export async function resolveListPageUi(page: Page): Promise<GdmsUiRoot> {
   for (const ui of listUiContexts(page)) {
     const btnSearch = ui.locator("#btnSearch, button.btn_search.k-button").first();
     if (await btnSearch.isVisible({ timeout: 1_500 }).catch(() => false)) return ui;
@@ -71,7 +84,7 @@ function rowLooksLikePlaceholder(texts: string[]): boolean {
   return /no\s+(data|record|enquiry)|not\s+found|empty/i.test(joined);
 }
 
-async function parseFollowUpListRows(surface: GdmsUiRoot): Promise<Locator[]> {
+export async function parseFollowUpListRows(surface: GdmsUiRoot): Promise<Locator[]> {
   const bodyRows = surface.locator("table tbody tr");
   const rawBodyCount = await bodyRows.count();
   const out: Locator[] = [];
@@ -89,6 +102,97 @@ async function parseFollowUpListRows(surface: GdmsUiRoot): Promise<Locator[]> {
     out.push(row);
   }
   return out;
+}
+
+const FOLLOW_UP_LIST_LOADER_SEL =
+  ".k-loading-mask:visible, .k-i-loading:visible, [class*='loading']:visible, [aria-busy='true']";
+
+/** True while GDMS Follow Up list shows a spinner / loading mask. */
+export async function isFollowUpListStillLoading(surface: GdmsUiRoot): Promise<boolean> {
+  return surface
+    .locator(FOLLOW_UP_LIST_LOADER_SEL)
+    .first()
+    .isVisible({ timeout: 250 })
+    .catch(() => false);
+}
+
+/**
+ * Wait until Search results finish loading — loader hidden + stable tbody/header.
+ * Do not treat 0 rows as "empty" until this returns stillLoading=false.
+ */
+export async function waitForFollowUpListResultsSettle(
+  surface: GdmsUiRoot,
+  page: Page,
+  log?: FollowUpSkipRunContext["log"],
+  timeoutMs = 45_000,
+): Promise<{ rowCount: number; stillLoading: boolean; headersReady: boolean }> {
+  const loader = surface.locator(FOLLOW_UP_LIST_LOADER_SEL);
+  const deadline = Date.now() + timeoutMs;
+
+  let sawLoader = false;
+  const detectDeadline = Date.now() + 4_000;
+  while (Date.now() < detectDeadline) {
+    if (await loader.first().isVisible({ timeout: 200 }).catch(() => false)) {
+      sawLoader = true;
+      break;
+    }
+    await pollDelay(250);
+  }
+  if (sawLoader) {
+    if (log) await log("info", "Follow Up list loading — waiting for GDMS spinner to finish.");
+    await loader
+      .first()
+      .waitFor({ state: "hidden", timeout: Math.max(8_000, deadline - Date.now()) })
+      .catch(() => {});
+  }
+
+  await page.waitForLoadState("domcontentloaded", { timeout: scaleMs(4_000) }).catch(() => {});
+
+  let lastCount = -1;
+  let stableTicks = 0;
+  while (Date.now() < deadline) {
+    if (await isFollowUpListStillLoading(surface)) {
+      stableTicks = 0;
+      await loader
+        .first()
+        .waitFor({ state: "hidden", timeout: Math.min(12_000, deadline - Date.now()) })
+        .catch(() => {});
+      continue;
+    }
+    const headerCount = await surface.locator("table thead th, table thead td").count();
+    const headersReady = headerCount > 0;
+    const count = await surface.locator("table tbody tr").count();
+    if (headersReady && count === lastCount) {
+      stableTicks += 1;
+      if (stableTicks >= 3) {
+        if (log) {
+          await log(
+            "info",
+            `Follow Up list settled — ${count} tbody row(s), ${headerCount} header cell(s).`,
+          );
+        }
+        return { rowCount: count, stillLoading: false, headersReady: true };
+      }
+    } else {
+      lastCount = count;
+      stableTicks = headersReady ? 1 : 0;
+    }
+    await pollDelay(450);
+  }
+
+  const stillLoading = await isFollowUpListStillLoading(surface);
+  const headerCount = await surface.locator("table thead th, table thead td").count();
+  const rowCount = await surface.locator("table tbody tr").count();
+  if (log && stillLoading) {
+    await log("warn", "Follow Up list still loading after wait — will retry Search (not treating as empty).");
+  } else if (log && headerCount === 0) {
+    await log("warn", "Follow Up list headers not ready after wait — will retry Search.");
+  }
+  return {
+    rowCount,
+    stillLoading: stillLoading || headerCount === 0,
+    headersReady: headerCount > 0,
+  };
 }
 
 async function isUsableListSearchButton(btn: Locator): Promise<boolean> {
@@ -123,10 +227,10 @@ async function resolvePageListSearchButton(page: Page): Promise<Locator | null> 
   return best;
 }
 
-async function clickSearchOnFollowUpList(
+export async function clickSearchOnFollowUpList(
   page: Page,
   log: FollowUpSkipRunContext["log"],
-): Promise<void> {
+): Promise<{ stillLoading: boolean }> {
   const ui = await resolveListPageUi(page);
   await log("info", "Clicking Search on Today's Follow Up list.");
 
@@ -139,16 +243,15 @@ async function clickSearchOnFollowUpList(
       throw new Error("Search button not found on Today's Follow Up list.");
     }
     await btn.scrollIntoViewIfNeeded({ timeout: 6_000 }).catch(() => {});
-    await humanDelay(300, 800);
+    await humanDelay(300, 700);
     await btn.click({ timeout: 9_000, force: true });
-    await humanDelay(1200, 2800);
-
-    const deadline = Date.now() + 25_000;
-    while (Date.now() < deadline) {
-      const count = await ui.locator("table tbody tr").count();
-      if (count !== prevBodyCount || count > 0) break;
-      await pollDelay(400);
+    const settled = await waitForFollowUpListResultsSettle(ui, page, log);
+    if (settled.rowCount === prevBodyCount && settled.rowCount === 0 && !settled.stillLoading) {
+      await humanDelay(600, 1_200);
+      const retry = await waitForFollowUpListResultsSettle(ui, page, log, 20_000);
+      return { stillLoading: retry.stillLoading };
     }
+    return { stillLoading: settled.stillLoading };
   } finally {
     await setAutomationInputBypass(page, false);
   }
@@ -222,43 +325,78 @@ async function waitForModalClosedOnList(
 async function processAllFollowUpRows(ctx: FollowUpSkipRunContext): Promise<number> {
   const { page: listPage, log } = ctx;
   let processed = 0;
+  let loggedRowCount = false;
+  const scLabels = await loadFollowUpSkipScLabels(prisma, ctx.dealerId);
 
-  await clickSearchOnFollowUpList(listPage, log);
-  const ui = await resolveListPageUi(listPage);
-  let rows = await parseFollowUpListRows(ui);
-
-  if (rows.length === 0) {
-    await log("info", "Today's Follow Up Search returned 0 rows — nothing to process.");
-    return 0;
-  }
-
-  await log("info", `Today's Follow Up — ${rows.length} row(s) on current page.`);
-
-  for (let i = 0; i < rows.length; i++) {
+  while (processed < 50) {
     if (await ctx.shouldStop()) throw new Error("stopped");
     await ctx.waitIfPaused();
 
     if (!(await isOnTodaysFollowUpList(listPage))) {
       await navigateToTodaysFollowUp(listPage, log, ctx.runId);
-      await clickSearchOnFollowUpList(listPage, log);
     }
 
-    const freshUi = await resolveListPageUi(listPage);
-    const freshRows = await parseFollowUpListRows(freshUi);
-    if (i >= freshRows.length) break;
-    const row = freshRows[i]!;
+    await clickSearchOnFollowUpList(listPage, log);
+    const ui = await resolveListPageUi(listPage);
+    const rows = await parseFollowUpListRows(ui);
 
-    await log("info", `Opening follow-up ${i + 1}/${freshRows.length} (double-click row).`);
-    const detailPage = await openEnquiryDetailPage(row);
+    if (rows.length === 0) {
+      if (processed === 0) {
+        await log("info", "Today's Follow Up Search returned 0 rows — nothing to process.");
+      }
+      break;
+    }
+
+    if (!loggedRowCount) {
+      await log("info", `Today's Follow Up — ${rows.length} row(s) on current page.`);
+      loggedRowCount = true;
+    }
+
+    if (await isAnyEnquiryModalVisible(listPage)) {
+      await log("warn", "Enquiry modal still open on list — closing before next row.");
+      await closeVisibleEnquiryModal(listPage, log);
+      await humanDelay(600, 1_200);
+      continue;
+    }
+
+    const row = rows[0]!;
+    const rawScLabel = await readSalesConsultantFromFollowUpRow(ui, row, scLabels);
+    const scLabelForStats = resolveKnownScLabel(rawScLabel, scLabels) ?? rawScLabel ?? "";
+    await log("info", `Opening follow-up ${processed + 1} (first row on list — double-click).`);
+
+    let detailPage: Page;
+    try {
+      detailPage = await openEnquiryDetailPage(row);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await log("error", msg);
+      await closeVisibleEnquiryModal(listPage, log).catch(() => undefined);
+      await humanDelay(800, 1_600);
+      continue;
+    }
+
     try {
       await completeFollowUpTabForSkip(detailPage, ctx);
       processed += 1;
+      if (ctx.startedByUserId && scLabelForStats.trim()) {
+        await incrementRunMetric(prisma, ctx.runId, "processed").catch(() => undefined);
+        await recordAutomationStatEvent(prisma, {
+          dealerId: ctx.dealerId,
+          workflowRunId: ctx.runId,
+          operation: "follow_up_skip",
+          startedByUserId: ctx.startedByUserId,
+          salesConsultantLabel: scLabelForStats.trim(),
+        }).catch(() => undefined);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await log("error", `Follow Up Skip failed on row: ${msg}`);
     } finally {
       await waitForModalClosedOnList(listPage, detailPage, log);
       if (!detailPage.isClosed() && detailPage !== listPage) {
         await detailPage.close().catch(() => undefined);
       }
-      await humanDelay(600, 1400);
+      await humanDelay(800, 1_600);
     }
   }
 
