@@ -19,6 +19,11 @@ function userVncRewrites() {
       source: `/gdms-browser-fup-u${slot}/:path*`,
       destination: `${host}:${FOLLOW_UP_WS_BASE + slot}/:path*`,
     });
+    // Lost Inquiry shares FUP websockify ports (separate browser profile, same slot).
+    rules.push({
+      source: `/gdms-browser-lost-u${slot}/:path*`,
+      destination: `${host}:${FOLLOW_UP_WS_BASE + slot}/:path*`,
+    });
   }
   return rules;
 }

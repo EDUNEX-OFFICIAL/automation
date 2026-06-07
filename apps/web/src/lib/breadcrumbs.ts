@@ -2,6 +2,7 @@ import { homePathForRole } from "@/lib/roles";
 
 const LABELS: Record<string, string> = {
   dashboard: "Dashboard",
+  operations: "Operations",
   "live-session": "Live session",
   leads: "Leads",
   users: "Team",

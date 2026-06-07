@@ -15,6 +15,9 @@ import { setOtpForRun, setControl, isWatchdogActive } from "../redis.js";
 import {
   vncPathPrefixForUserOperation,
   vncWorkspaceForOperation,
+  operationForVncWorkspace,
+  LIVE_SESSION_VNC_TAB_LABELS,
+  type GdmsVncWorkspaceId,
   SocketEvents,
   automationRunParamsSchema,
   isEnabledAutomationOperation,
@@ -27,6 +30,7 @@ import {
   defaultLoginWorkflow,
   enquiryTransferWorkflow,
   followUpSkipWorkflow,
+  lostInquiryWorkflow,
   type WorkflowDefinition,
 } from "@gdms/workflow-engine";
 import { env } from "../config.js";
@@ -111,7 +115,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
 
     const runParams: AutomationRunParams = {
       operation: body.operation,
-      sources: body.operation === "follow_up_skip" ? [] : body.sources,
+      sources:
+        body.operation === "follow_up_skip" || body.operation === "lost_inquiry" ? [] : body.sources,
       ...(body.subSources ? { subSources: body.subSources } : {}),
     };
 
@@ -138,7 +143,8 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       dealerId: body.dealerId,
       startedByUserId: credsUserId,
       operation: body.operation,
-      sources: body.operation === "follow_up_skip" ? [] : body.sources,
+      sources:
+        body.operation === "follow_up_skip" || body.operation === "lost_inquiry" ? [] : body.sources,
       subSources: body.subSources,
     };
 
@@ -253,6 +259,55 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       if (run) return { run };
     }
     return { run: null };
+  });
+
+  /** One in-flight run per automation operation (Live session tabs). */
+  app.get("/v1/workflow-runs/in-flight-tabs", { preHandler: authPreHandler }, async (req) => {
+    const queryDealer = (req.query as { dealerId?: string }).dealerId;
+    const userDealer = req.user!.dealerId ?? null;
+    const dealerId = queryDealer ?? userDealer;
+    if (!dealerId) {
+      return { enquiry_transfer: null, follow_up_skip: null, lost_inquiry: null };
+    }
+    if (!canAccessDealer(userDealer, dealerId, req.user!.role)) {
+      return { enquiry_transfer: null, follow_up_skip: null, lost_inquiry: null };
+    }
+
+    await reconcileStaleWorkflowRunsForDealer(dealerId);
+    const activeStatuses = ["PENDING", "RUNNING", "PAUSED_OTP", "PAUSED_USER", "FAILED"] as const;
+    const runs = await prisma.workflowRun.findMany({
+      where: {
+        ...workflowRunScopeForActor(runActor(req), { dealerId }),
+        status: { in: [...activeStatuses] },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 30,
+    });
+
+    const pickForOp = (op: string) => {
+      const forOp = runs.filter((r) => {
+        const params = r.runParams as { operation?: string } | null;
+        const operation = params?.operation ?? r.currentStep ?? "";
+        if (op === "follow_up_skip") {
+          return operation === "follow_up_skip" || operation === "follow_up";
+        }
+        return operation === op;
+      });
+      return (
+        forOp.find((r) => r.status === "RUNNING") ??
+        forOp.find((r) => r.status === "PAUSED_OTP") ??
+        forOp.find((r) => r.status === "PAUSED_USER") ??
+        forOp.find((r) => r.status === "PENDING") ??
+        forOp.find((r) => r.status === "FAILED") ??
+        null
+      );
+    };
+
+    return {
+      enquiry_transfer: pickForOp("enquiry_transfer"),
+      follow_up_skip: pickForOp("follow_up_skip"),
+      lost_inquiry: pickForOp("lost_inquiry"),
+    };
   });
 
   app.post(
@@ -467,10 +522,12 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       const params = automationRunParamsSchema.safeParse(run.runParams);
       if (
         !params.success ||
-        (params.data.operation !== "enquiry_transfer" && params.data.operation !== "follow_up_skip")
+        (params.data.operation !== "enquiry_transfer" &&
+          params.data.operation !== "follow_up_skip" &&
+          params.data.operation !== "lost_inquiry")
       ) {
         return reply.code(409).send({
-          error: "Resume is only available for enquiry transfer or follow up skip runs.",
+          error: "Resume is only available for enquiry transfer, follow up skip, or lost inquiry runs.",
         });
       }
 
@@ -532,11 +589,13 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
         ? (wfRow.definition as unknown as WorkflowDefinition)
         : operation === "follow_up_skip"
           ? followUpSkipWorkflow()
-          : enquiryTransferWorkflow();
+          : operation === "lost_inquiry"
+            ? lostInquiryWorkflow()
+            : enquiryTransferWorkflow();
       const loginWorkflow = defaultLoginWorkflow(base);
 
       const resumePath =
-        operation === "follow_up_skip"
+        operation === "follow_up_skip" || operation === "lost_inquiry"
           ? "internal/resume-follow-up-skip"
           : "internal/resume-enquiry-transfer";
 
@@ -589,7 +648,9 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
       const runParams = automationRunParamsSchema.safeParse(run.runParams);
       const op = runParams.success ? runParams.data.operation : "enquiry_transfer";
       const retryPath =
-        op === "follow_up_skip" ? "internal/retry-follow-up-skip" : "internal/retry-enquiry-transfer";
+        op === "follow_up_skip" || op === "lost_inquiry"
+          ? "internal/retry-follow-up-skip"
+          : "internal/retry-enquiry-transfer";
 
       const res = await fetch(`${automationBase()}/${retryPath}`, {
         method: "POST",
@@ -638,11 +699,11 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
     const siteOrigin = env.CORS_ORIGIN.split(",")[0]?.trim() ?? "https://bot.edunexservices.in";
     const password = env.GDMS_VNC_PASSWORD ?? "gdms";
     const query = req.query as { workspace?: string; runId?: string };
-    const workspaceId =
-      query.workspace === "2" ? 2 : query.workspace === "1" ? 1 : undefined;
+    const workspaceId: GdmsVncWorkspaceId | undefined =
+      query.workspace === "3" ? 3 : query.workspace === "2" ? 2 : query.workspace === "1" ? 1 : undefined;
 
     let viewUserId = req.user!.sub;
-    let operation = workspaceId === 2 ? "follow_up_skip" : "enquiry_transfer";
+    let operation = workspaceId != null ? operationForVncWorkspace(workspaceId) : "enquiry_transfer";
 
     if (query.runId) {
       const run = await prisma.workflowRun.findUnique({ where: { id: query.runId } });
@@ -671,23 +732,19 @@ export async function registerWorkflowRunRoutes(app: FastifyInstance): Promise<v
 
     const pathForUser = (op: string) => vncPathPrefixForUserOperation(viewUserId, op);
 
-    const workspaces = ([1, 2] as const).map((id) => {
-      const op = id === 2 ? "follow_up_skip" : "enquiry_transfer";
+    const workspaces = ([1, 2, 3] as const).map((id) => {
+      const op = operationForVncWorkspace(id);
       const pathPrefix = pathForUser(op);
       return {
         id,
-        label: id === 2 ? "Follow Up Skip" : "Enquiry transfer",
+        label: LIVE_SESSION_VNC_TAB_LABELS[id],
         pathPrefix,
         url: buildUrl(pathPrefix),
       };
     });
 
     const opForWorkspace =
-      workspaceId != null
-        ? workspaceId === 2
-          ? "follow_up_skip"
-          : "enquiry_transfer"
-        : operation;
+      workspaceId != null ? operationForVncWorkspace(workspaceId) : operation;
     const primaryPrefix = pathForUser(opForWorkspace);
 
     return {

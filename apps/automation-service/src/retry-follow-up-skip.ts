@@ -1,8 +1,10 @@
 import { getActiveSession } from "./active-sessions.js";
 import { runFollowUpSkip } from "./follow-up-skip.js";
+import { runLostInquiry } from "./lost-inquiry.js";
 import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import { createPrisma } from "@gdms/database";
+import { automationRunParamsSchema } from "@gdms/shared";
 import { Redis } from "ioredis";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
 import { env } from "./config.js";
@@ -14,7 +16,7 @@ async function publish(redis: Redis, type: string, dealerId: string, payload: un
   await redis.publish(WORKFLOW_REDIS_CHANNEL, JSON.stringify({ type, dealerId, payload }));
 }
 
-/** Continue follow-up-skip on an already-open browser session. */
+/** Continue follow-up-skip or lost-inquiry on an already-open browser session. */
 export async function retryFollowUpSkip(runId: string): Promise<void> {
   const session = getActiveSession(runId);
   if (!session) {
@@ -57,24 +59,61 @@ export async function retryFollowUpSkip(runId: string): Promise<void> {
     throw new Error(ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE);
   };
 
+  const run = await prisma.workflowRun.findUnique({
+    where: { id: runId },
+    select: { startedByUserId: true, runParams: true },
+  });
+  const startedByUserId = run?.startedByUserId ?? "";
+  const params = automationRunParamsSchema.safeParse(run?.runParams);
+  const operation = params.success ? params.data.operation : "follow_up_skip";
+  const isLostInquiry = operation === "lost_inquiry";
+
   try {
     await prisma.workflowRun.update({
       where: { id: runId },
       data: { status: "RUNNING", errorMessage: null, endedAt: null },
     });
-    await log("info", "Continuing Follow Up Skip on open browser session.");
+    await log(
+      "info",
+      isLostInquiry
+        ? "Continuing Lost Inquiry on open browser session."
+        : "Continuing Follow Up Skip on open browser session.",
+    );
+
     const remarkConfig = await loadDealerRemarkConfig(dealerId);
-    await runFollowUpSkip({
-      page,
-      runId,
-      dealerId,
-      redis: redisClient,
-      followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
-      log,
-      shouldStop,
-      waitIfPaused,
-      signalManualIntervention,
+    const settingsRow = await prisma.dealerAutomationSettings.findUnique({
+      where: { dealerId },
+      select: { ollamaModel: true },
     });
+
+    if (isLostInquiry) {
+      await runLostInquiry({
+        page,
+        runId,
+        dealerId,
+        startedByUserId,
+        redis: redisClient,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
+        log,
+        shouldStop,
+        waitIfPaused,
+        signalManualIntervention,
+      });
+    } else {
+      await runFollowUpSkip({
+        page,
+        runId,
+        dealerId,
+        startedByUserId,
+        redis: redisClient,
+        followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
+        log,
+        shouldStop,
+        waitIfPaused,
+        signalManualIntervention,
+      });
+    }
   } finally {
     redisClient.disconnect();
   }

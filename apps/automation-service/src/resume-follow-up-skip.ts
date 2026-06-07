@@ -4,6 +4,8 @@ import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
 import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
+import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
+import { startGdmsBrowserWindowGeometryRefresh } from "./gdms-browser-window-geometry.js";
 import {
   browserProfileKeyForOperation,
   closeActiveSessionsForDealer,
@@ -11,6 +13,7 @@ import {
   registerActiveSession,
 } from "./active-sessions.js";
 import { runFollowUpSkip } from "./follow-up-skip.js";
+import { runLostInquiry } from "./lost-inquiry.js";
 import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { ENQUIRY_TRANSFER_PAUSED_USER_MESSAGE } from "./workflow-pause.js";
 import {
@@ -50,10 +53,10 @@ async function waitIfPaused(redis: Redis, runId: string): Promise<void> {
   }
 }
 
-/** Re-open follow-up-skip browser profile and continue Today's Follow Up loop. */
+/** Re-open follow-up / lost-inquiry browser profile and continue Today's Follow Up loop. */
 export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void> {
-  if (payload.operation !== "follow_up_skip") {
-    throw new Error("Resume is only supported for follow up skip runs.");
+  if (payload.operation !== "follow_up_skip" && payload.operation !== "lost_inquiry") {
+    throw new Error("Resume is only supported for follow up skip or lost inquiry runs.");
   }
 
   if (getActiveSession(payload.runId)) {
@@ -82,9 +85,12 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
 
   const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
   await closeActiveSessionsForDealer(dealerId, profileKey);
+  const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
   const context = await launchGdmsPersistentContext(sessionDir, {
-    display: displayForUserOperation(payload.startedByUserId, payload.operation),
+    display: vncDisplay,
   });
+  startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+  startGdmsBrowserWindowGeometryRefresh(vncDisplay);
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (m) => void log("warn", m));
@@ -132,7 +138,12 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
       workflowRunId: runId,
       dealerId,
     });
-    await log("info", "Resuming Follow Up Skip from saved browser profile (workspace 2).");
+    await log(
+      "info",
+      payload.operation === "lost_inquiry"
+        ? "Resuming Lost Inquiry from saved browser profile (workspace 2)."
+        : "Resuming Follow Up Skip from saved browser profile (workspace 2).",
+    );
 
     page = await pickGdmsWorkPage(context);
     const baseUrl =
@@ -172,17 +183,39 @@ export async function resumeFollowUpSkip(payload: ExecutePayload): Promise<void>
     };
 
     const remarkConfig = await loadDealerRemarkConfig(dealerId);
-    await runFollowUpSkip({
-      page,
-      runId,
-      dealerId,
-      redis: redisClient,
-      followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
-      log,
-      shouldStop: () => isStopped(redisClient, runId),
-      waitIfPaused: () => waitIfPaused(redisClient, runId),
-      signalManualIntervention,
+    const settingsRow = await prisma.dealerAutomationSettings.findUnique({
+      where: { dealerId },
+      select: { ollamaModel: true },
     });
+
+    if (payload.operation === "lost_inquiry") {
+      await runLostInquiry({
+        page,
+        runId,
+        dealerId,
+        startedByUserId: payload.startedByUserId,
+        redis: redisClient,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
+        log,
+        shouldStop: () => isStopped(redisClient, runId),
+        waitIfPaused: () => waitIfPaused(redisClient, runId),
+        signalManualIntervention,
+      });
+    } else {
+      await runFollowUpSkip({
+        page,
+        runId,
+        dealerId,
+        startedByUserId: payload.startedByUserId,
+        redis: redisClient,
+        followUpSkipRemarkBases: remarkConfig.followUpSkipRemarkBases,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
+        log,
+        shouldStop: () => isStopped(redisClient, runId),
+        waitIfPaused: () => waitIfPaused(redisClient, runId),
+        signalManualIntervention,
+      });
+    }
   } catch (e) {
     const msg = String(e);
     const stopped = msg === "stopped" || (e instanceof Error && e.message === "stopped");

@@ -43,6 +43,20 @@ export async function isResumeTransferRequested(redis: Redis, runId: string): Pr
   return (await redis.get(redisControlKey(runId, "resume-transfer"))) === "1";
 }
 
+export function redisTransferLockKey(runId: string): string {
+  return `run:${runId}:enquiry-transfer-lock`;
+}
+
+/** Prevents duplicate runEnquiryTransfer loops on the same run. */
+export async function tryAcquireTransferLock(redis: Redis, runId: string): Promise<boolean> {
+  const acquired = await redis.set(redisTransferLockKey(runId), "1", "EX", 7200, "NX");
+  return acquired === "OK";
+}
+
+export async function releaseTransferLock(redis: Redis, runId: string): Promise<void> {
+  await redis.del(redisTransferLockKey(runId));
+}
+
 export function redisWatchHeartbeatKey(runId: string): string {
   return `run:${runId}:watch:heartbeat`;
 }
@@ -153,6 +167,26 @@ async function isLoginFormVisible(page: Page): Promise<boolean> {
   return false;
 }
 
+/**
+ * GDMS returns a bare JS redirect when the session is invalid. With
+ * `X-Content-Type-Options: nosniff` and no Content-Type, Chromium shows that
+ * script as plain text instead of executing it — login form never appears.
+ */
+export async function isGdmsRedirectScriptPage(page: Page): Promise<boolean> {
+  try {
+    const body = (await page.locator("body").innerText({ timeout: 3_000 }))
+      .slice(0, 4_000)
+      .toLowerCase();
+    if (!body.includes("location.href")) return false;
+    return (
+      /window\.(top|self|opener)\.location\.href/.test(body) ||
+      (/window\.location\.href/.test(body) && /login|selectlogin/.test(body))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** True when persistent session appears authenticated (no login form, no session-expired copy). */
 export async function isGdmsLoggedIn(page: Page): Promise<boolean> {
   if (await isGdmsSessionExpired(page)) return false;
@@ -161,6 +195,7 @@ export async function isGdmsLoggedIn(page: Page): Promise<boolean> {
 }
 
 export async function isGdmsSessionExpired(page: Page): Promise<boolean> {
+  if (await isGdmsRedirectScriptPage(page)) return true;
   const patterns = timeoutPatterns();
   let title = "";
   let body = "";
@@ -182,7 +217,17 @@ export async function redirectToGdmsLogin(
   baseUrl: string,
 ): Promise<void> {
   await context.clearCookies();
-  await page.goto(baseUrl, { timeout: 60_000, waitUntil: "domcontentloaded" });
+  const openLogin = async (): Promise<void> => {
+    await page.goto(baseUrl, { timeout: 60_000, waitUntil: "load" });
+  };
+  await openLogin();
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (await isLoginFormVisible(page)) return;
+    if (!(await isGdmsRedirectScriptPage(page))) return;
+    await openLogin();
+    await page.waitForTimeout(400);
+  }
 }
 
 /** No `[class*="left"]` — matches hidden `irx_progressStr_left` on selectMain loader. */

@@ -135,11 +135,11 @@
   }
 
   .page-stack {
-    @apply flex w-full flex-col gap-6 lg:gap-7;
+    @apply flex w-full flex-col gap-4 sm:gap-6 lg:gap-7;
   }
 
   .page-main {
-    @apply w-full flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8;
+    @apply w-full flex-1 px-3 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8;
   }
 
   .content-grid {
@@ -206,12 +206,15 @@
     @apply grid gap-5 sm:grid-cols-2;
   }
 
-  /* Hide native select arrow — NativeSelect renders one chevron only */
+  /* Single chevron via background — hide native select arrow completely */
   .native-select-control {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    background-image: none;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.875rem center;
+    background-size: 1rem;
   }
   .native-select-control::-ms-expand {
     display: none;
@@ -235,7 +238,12 @@
   .gradient-mesh {
     background:
       radial-gradient(ellipse 80% 60% at 0% -10%, hsl(var(--primary) / 0.07), transparent 55%),
+      radial-gradient(ellipse 60% 40% at 100% 0%, hsl(var(--primary) / 0.04), transparent 50%),
       hsl(var(--background));
+  }
+
+  .dashboard-section {
+    @apply rounded-2xl border border-border/60 bg-card shadow-card sm:rounded-3xl;
   }
 
   .auth-panel-gradient {

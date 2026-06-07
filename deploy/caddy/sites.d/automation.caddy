@@ -1,6 +1,4 @@
 bot.edunexservices.in {
-	encode gzip
-
 	handle /socket.io* {
 		reverse_proxy automation-api:4000
 	}

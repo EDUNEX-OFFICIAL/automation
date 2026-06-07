@@ -13,7 +13,7 @@ import {
   type CallStateMachineState,
 } from "@gdms/shared";
 import { env } from "./config.js";
-import { inferIntent } from "./ollama.js";
+import { inferIntent, inferLostInquiryCancellation, inferLostInquirySurveillance } from "./ollama.js";
 
 const prisma = createPrisma();
 
@@ -81,6 +81,41 @@ async function main(): Promise<void> {
     const body = z.object({ aiCallId: z.string() }).parse(req.body);
     void runCallSession(body.aiCallId).catch((e) => app.log.error(e));
     return { accepted: true };
+  });
+
+  app.post("/internal/lost-inquiry/cancellation", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AI_INTERNAL_SECRET) return reply.code(401).send({ error: "Unauthorized" });
+    const body = z
+      .object({
+        remark: z.string(),
+        reasonFailureOptions: z.array(z.string()),
+        lostDueToOptions: z.array(z.string()),
+        lostDueToSubOptions: z.array(z.string()),
+        model: z.string().optional(),
+      })
+      .parse(req.body);
+    const result = await inferLostInquiryCancellation(body);
+    if (!result) return reply.code(422).send({ error: "Could not resolve cancellation dropdowns" });
+    return result;
+  });
+
+  app.post("/internal/lost-inquiry/surveillance", async (req, reply) => {
+    const hdr = req.headers["x-internal-secret"];
+    if (hdr !== env.AI_INTERNAL_SECRET) return reply.code(401).send({ error: "Unauthorized" });
+    const body = z
+      .object({
+        step: z.string(),
+        error: z.string(),
+        remark: z.string().nullable(),
+        snapshot: z.record(z.unknown()),
+        attempt: z.number().int().min(1),
+        model: z.string().optional(),
+      })
+      .parse(req.body);
+    const result = await inferLostInquirySurveillance(body);
+    if (!result) return reply.code(422).send({ error: "Could not plan surveillance recovery" });
+    return result;
   });
 
   app.post("/internal/train/voice", async (req, reply) => {

@@ -9,7 +9,7 @@ echo "=== compose ps (worker/automation should be absent or Exited) ==="
 
 echo ""
 echo "=== tunnel ports (127.0.0.1 only) ==="
-ss -lntp 2>/dev/null | grep -E '6380|54322' || { echo "FAIL: ports not listening"; exit 1; }
+ss -lntp 2>/dev/null | grep -E '6380|32459' || { echo "FAIL: ports not listening"; exit 1; }
 
 echo ""
 echo "=== redis ping via tunnel port ==="

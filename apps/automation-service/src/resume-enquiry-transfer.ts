@@ -4,6 +4,8 @@ import { createPrisma } from "@gdms/database";
 import { SocketEvents, WORKFLOW_REDIS_CHANNEL, type LogLinePayload } from "@gdms/shared";
 import { displayForUserOperation } from "@gdms/shared";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
+import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
+import { startGdmsBrowserWindowGeometryRefresh } from "./gdms-browser-window-geometry.js";
 import {
   closeActiveSessionsForDealer,
   getActiveSession,
@@ -82,9 +84,12 @@ export async function resumeEnquiryTransfer(payload: ExecutePayload): Promise<vo
   const profileKey = browserProfileKeyForOperation(dealerId, payload.operation, payload.startedByUserId);
   const sessionDir = path.join(env.SESSIONS_DIR, profileKey);
   await closeActiveSessionsForDealer(dealerId, profileKey);
+  const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
   const context = await launchGdmsPersistentContext(sessionDir, {
-    display: displayForUserOperation(payload.startedByUserId, payload.operation),
+    display: vncDisplay,
   });
+  startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+  startGdmsBrowserWindowGeometryRefresh(vncDisplay);
 
   await installAutomationBrowserScripts(context);
   attachNonFatalNetworkLogging(context, (message) => {

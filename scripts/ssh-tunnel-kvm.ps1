@@ -14,11 +14,11 @@ if ([string]::IsNullOrWhiteSpace($SshTarget) -or $SshTarget -match "YOUR_KVM") {
     exit 1
 }
 
-Write-Host "Tunnel: localhost:6380 -> KVM Redis, localhost:54322 -> KVM Postgres" -ForegroundColor Cyan
+Write-Host "Tunnel: localhost:6380 -> KVM Redis, localhost:32459 -> KVM Postgres" -ForegroundColor Cyan
 Write-Host "Target: $SshTarget (Ctrl+C to close)" -ForegroundColor Cyan
 Write-Host "Do not run pnpm docker:up on this PC while the tunnel is open (port clash)." -ForegroundColor Yellow
 
 ssh -N -o ServerAliveInterval=60 `
     -L 6380:127.0.0.1:6380 `
-    -L 54322:127.0.0.1:54322 `
+    -L 32459:127.0.0.1:32459 `
     $SshTarget

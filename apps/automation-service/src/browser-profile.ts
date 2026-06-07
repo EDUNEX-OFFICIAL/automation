@@ -4,6 +4,8 @@ import { execSync } from "node:child_process";
 import type { BrowserContext } from "playwright";
 import { chromium } from "playwright";
 import { gdmsBrowserHeadless, gdmsChromiumLaunchArgs } from "./browser-context.js";
+import { ensureXvfbDisplay, isMissingXServerError } from "./ensure-xvfb-display.js";
+import { env } from "./config.js";
 import { gdmsVncViewport } from "./gdms-vnc-display.js";
 
 const LOCK_FILES = ["SingletonLock", "SingletonSocket", "SingletonCookie"] as const;
@@ -56,12 +58,15 @@ export async function launchGdmsPersistentContext(
 ): Promise<BrowserContext> {
   fs.mkdirSync(sessionDir, { recursive: true });
   const headless = opts?.headless ?? gdmsBrowserHeadless();
+  const remoteView = Boolean(opts?.display) || env.GDMS_REMOTE_VIEW;
   const launchOpts: Parameters<typeof chromium.launchPersistentContext>[1] = {
     headless,
-    args: gdmsChromiumLaunchArgs(),
-    viewport: opts?.viewport ?? gdmsVncViewport(),
+    args: gdmsChromiumLaunchArgs(remoteView),
+    // Fixed viewport + browser chrome exceeds Xvfb height and clips the top in noVNC.
+    viewport: remoteView ? null : (opts?.viewport ?? gdmsVncViewport()),
   };
   if (opts?.display) {
+    await ensureXvfbDisplay(opts.display);
     launchOpts.env = {
       ...process.env,
       DISPLAY: opts.display,
@@ -75,6 +80,11 @@ export async function launchGdmsPersistentContext(
     return await attempt();
   } catch (e) {
     const raw = String(e);
+    if (isMissingXServerError(raw) && opts?.display) {
+      await ensureXvfbDisplay(opts.display);
+      await new Promise((r) => setTimeout(r, 500));
+      return await attempt();
+    }
     if (!isChromiumProfileLockError(raw)) throw e;
     killOrphanChromiumForProfile(sessionDir);
     clearStaleChromiumProfileLocks(sessionDir);

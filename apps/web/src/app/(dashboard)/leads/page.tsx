@@ -152,7 +152,7 @@ export default function LeadsPage() {
               title="No leads yet"
               action={
                 <Button variant="outline" size="sm" asChild>
-                  <Link href="/dashboard">Go to Dashboard</Link>
+                  <Link href="/operations">Go to Operations</Link>
                 </Button>
               }
             />

@@ -31,3 +31,5 @@ export * from "./gdms-vnc-workspaces.js";
 export * from "./gdms-bootstrap.js";
 export * from "./gdms-urls.js";
 export * from "./run-metrics.js";
+export * from "./automation-stats.js";
+export * from "./lost-inquiry.js";

@@ -1,4 +1,5 @@
 import { env } from "./config.js";
+import { gdmsVncViewport } from "./gdms-vnc-display.js";
 
 /**
  * GDMS_REMOTE_VIEW: headed Chromium on Xvfb, user watches via noVNC (new browser tab, zero install).
@@ -19,7 +20,18 @@ export function assertEnquiryTransferBrowserMode(): void {
   }
 }
 
-export const gdmsChromiumLaunchArgs = (): string[] => [
-  "--no-sandbox",
-  "--disable-dev-shm-usage",
-];
+export const gdmsChromiumLaunchArgs = (remoteView = false): string[] => {
+  const { width, height } = gdmsVncViewport();
+  return [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    ...(remoteView
+      ? [
+          `--window-size=${width},${height}`,
+          "--window-position=0,0",
+          "--disable-infobars",
+          "--disable-session-crashed-bubble",
+        ]
+      : []),
+  ];
+};

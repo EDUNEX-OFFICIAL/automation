@@ -21,24 +21,28 @@ export function StatCard({ label, value, hint, icon: Icon, variant = "default", 
   return (
     <div
       className={cn(
-        "flex gap-4 rounded-xl border border-border/80 bg-card p-5 shadow-card transition-shadow hover:shadow-md",
+        "group flex gap-3 rounded-xl border border-border/80 bg-card p-4 shadow-card transition-all hover:-translate-y-0.5 hover:shadow-md sm:gap-4 sm:p-5",
         className,
       )}
     >
       {Icon ? (
         <div
           className={cn(
-            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-105 sm:h-11 sm:w-11",
             iconBg[variant],
           )}
         >
-          <Icon className="h-5 w-5" strokeWidth={2} />
+          <Icon className="h-4 w-4 sm:h-5 sm:w-5" strokeWidth={2} />
         </div>
       ) : null}
-      <div className="min-w-0">
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <p className="mt-1 text-xl font-semibold tracking-tight text-foreground">{value}</p>
-        {hint ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hint}</p> : null}
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium leading-tight text-muted-foreground sm:text-xs">{label}</p>
+        <p className="mt-0.5 text-lg font-semibold tracking-tight text-foreground sm:mt-1 sm:text-xl">{value}</p>
+        {hint ? (
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground sm:mt-1 sm:text-xs sm:leading-relaxed">
+            {hint}
+          </p>
+        ) : null}
       </div>
     </div>
   );

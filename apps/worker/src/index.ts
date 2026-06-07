@@ -7,6 +7,7 @@ import {
   defaultLoginWorkflow,
   enquiryTransferWorkflow,
   followUpSkipWorkflow,
+  lostInquiryWorkflow,
   operationStubWorkflow,
   type WorkflowDefinition,
 } from "@gdms/workflow-engine";
@@ -88,6 +89,7 @@ async function dispatchAutomation(input: {
 function resolveOperationWorkflow(operation: AutomationOperation): WorkflowDefinition {
   if (operation === "enquiry_transfer") return enquiryTransferWorkflow();
   if (operation === "follow_up_skip" || operation === "follow_up") return followUpSkipWorkflow();
+  if (operation === "lost_inquiry") return lostInquiryWorkflow();
   const targetUrl = env.GDMS_WORKFLOW_URL ?? env.GDMS_BASE_URL ?? "https://example.com";
   return operationStubWorkflow(operation, targetUrl);
 }

@@ -18,14 +18,18 @@ import {
 } from "./enquiry-transfer.js";
 import { displayForUserOperation, gdmsBootstrapRedisKey, resolveGdmsHomeUrl } from "@gdms/shared";
 import { applyGdmsBootstrapCookies } from "./gdms-cookie-bootstrap.js";
-import { humanDelay } from "./human-delay.js";
+import { humanDelay, setAutomationOperationPace } from "./human-delay.js";
 import { assertEnquiryTransferBrowserMode } from "./browser-context.js";
 import { launchGdmsPersistentContext } from "./browser-profile.js";
+import { startGdmsBrowserWindowTitleRefresh } from "./gdms-browser-window-title.js";
+import { startGdmsBrowserWindowGeometryRefresh } from "./gdms-browser-window-geometry.js";
 import { env } from "./config.js";
 import { detectGdmsLoginError, gdmsLoginErrorMessage } from "./gdms-login-errors.js";
 import {
   isGdmsDashboardReady,
   isGdmsLoggedIn,
+  isGdmsRedirectScriptPage,
+  redirectToGdmsLogin,
   redisControlKey,
   waitForGdmsDashboardReady,
   touchWatchHeartbeat,
@@ -44,6 +48,7 @@ import {
   unregisterActiveSession,
 } from "./active-sessions.js";
 import { runFollowUpSkip } from "./follow-up-skip.js";
+import { runLostInquiry } from "./lost-inquiry.js";
 import { loadDealerRemarkConfig } from "./dealer-remark-config.js";
 import { registerOtpWake } from "./otp-wake.js";
 
@@ -367,6 +372,8 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
   let aliveLoop: ReturnType<typeof setInterval> | null = null;
   let context: BrowserContext | null = null;
   let shotLoop: ReturnType<typeof setInterval> | null = null;
+  let stopTitleRefresh: (() => void) | null = null;
+  let stopGeometryRefresh: (() => void) | null = null;
   let otpResolved: string | undefined;
   let browserRetained = false;
   let page: Page | null = null;
@@ -402,9 +409,11 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
   );
   const isEnquiryTransfer = payload.operation === "enquiry_transfer";
   const isFollowUpSkip = payload.operation === "follow_up_skip" || payload.operation === "follow_up";
-  /** Enquiry transfer runs until Stop; Follow Up Skip exits when the list is empty. */
+  const isLostInquiry = payload.operation === "lost_inquiry";
+  /** Enquiry transfer runs until Stop; Follow Up Skip / Lost Inquiry exit when the list is empty. */
   const isLongRunningAutomation = isEnquiryTransfer;
-  const isGdmsBrowserAutomation = isEnquiryTransfer || isFollowUpSkip;
+  const isGdmsBrowserAutomation = isEnquiryTransfer || isFollowUpSkip || isLostInquiry;
+  const isListExhaustionAutomation = isFollowUpSkip || isLostInquiry;
 
   const startAliveHeartbeat = (): void => {
     if (aliveLoop) return;
@@ -434,6 +443,10 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     const vncDisplay = displayForUserOperation(payload.startedByUserId, payload.operation);
     await closeActiveSessionsForDealer(payload.dealerId, profileKey);
     context = await launchGdmsPersistentContext(sessionDir, { display: vncDisplay });
+    if (isGdmsBrowserAutomation && vncDisplay) {
+      stopTitleRefresh = startGdmsBrowserWindowTitleRefresh(vncDisplay, payload.operation);
+      stopGeometryRefresh = startGdmsBrowserWindowGeometryRefresh(vncDisplay);
+    }
     await log(
       "info",
       `GDMS browser for user ${payload.startedByUserId} on display ${vncDisplay} (${payload.operation}).`,
@@ -529,19 +542,31 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       env.GDMS_BASE_URL;
     const homeUrl = resolveGdmsHomeUrl(env.GDMS_HOME_URL);
 
-    const firstNav = bootstrapCookiesApplied ? homeUrl : loginUrl;
+    let bootstrapTokenActive = bootstrapCookiesApplied;
+    const firstNav = bootstrapTokenActive ? homeUrl : loginUrl;
     if (firstNav) {
       await page.goto(firstNav, { timeout: 60_000, waitUntil: "domcontentloaded" });
+      if (await isGdmsRedirectScriptPage(page)) {
+        await log("info", "GDMS session redirect script detected — opening login page.");
+        await redirectToGdmsLogin(page, context, loginUrl);
+        bootstrapTokenActive = false;
+      }
     }
 
     let skipLogin = isGdmsBrowserAutomation
       ? await isGdmsDashboardReady(page)
       : await isGdmsLoggedIn(page);
 
-    if (!skipLogin && bootstrapCookiesApplied && homeUrl) {
+    if (!skipLogin && bootstrapTokenActive && homeUrl) {
       for (let attempt = 0; attempt < 4 && !skipLogin; attempt++) {
         await page.goto(homeUrl, { timeout: 90_000, waitUntil: "domcontentloaded" }).catch(() => undefined);
         await page.waitForTimeout(2000);
+        if (await isGdmsRedirectScriptPage(page)) {
+          await log("info", "GDMS session redirect script detected — opening login page.");
+          await redirectToGdmsLogin(page, context, loginUrl);
+          bootstrapTokenActive = false;
+          break;
+        }
         skipLogin = isGdmsBrowserAutomation
           ? await isGdmsDashboardReady(page)
           : await isGdmsLoggedIn(page);
@@ -557,13 +582,18 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       }
     }
 
-    if (!skipLogin && bootstrapCookiesApplied) {
-      const msg =
-        "Saved GDMS login token did not open a logged-in session (expired or wrong cookie). " +
-        "Log in to GDMS in Chrome, copy a fresh BNES_JSESSIONID from DevTools → Application → Cookies, " +
-        "save it on Dashboard → Use GDMS login token, then START again.";
-      await log("error", msg);
-      throw new Error(msg);
+    if (!skipLogin && bootstrapCookiesApplied && !bootstrapTokenActive) {
+      await log(
+        "warn",
+        "Saved GDMS login token expired — running automated login (User ID, password, OTP).",
+      );
+    } else if (!skipLogin && bootstrapTokenActive) {
+      await redirectToGdmsLogin(page, context, loginUrl);
+      bootstrapTokenActive = false;
+      await log(
+        "warn",
+        "Saved GDMS login token did not restore a session — opening login page for automated login.",
+      );
     }
     const stepGroups: { label: string; steps: WorkflowDefinition["steps"] }[] = [];
     if (skipLogin) {
@@ -658,8 +688,9 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
     const dealerRemarkConfig = await loadDealerRemarkConfig(payload.dealerId);
 
     if (payload.operation === "enquiry_transfer") {
+      setAutomationOperationPace("enquiry_transfer");
       await log("info", "Starting enquiry transfer automation (runs until Stop).");
-      await humanDelay(800, 1500);
+      await humanDelay(400, 800);
       await runEnquiryTransfer({
         page,
         runId: payload.runId,
@@ -677,18 +708,25 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
         waitIfPaused: runCtx.waitIfPaused,
         signalManualIntervention,
       });
-      await humanDelay(500, 1200);
+      await humanDelay(300, 600);
     }
 
     if (isFollowUpSkip) {
+      setAutomationOperationPace("follow_up_skip");
+      const settingsRow = await prisma.dealerAutomationSettings.findUnique({
+        where: { dealerId: payload.dealerId },
+        select: { ollamaModel: true },
+      });
       await log("info", "Starting Follow Up Skip (Today's Follow Up) — stops when list is empty.");
-      await humanDelay(800, 1500);
+      await humanDelay(400, 800);
       await runFollowUpSkip({
         page,
         runId: payload.runId,
         dealerId: payload.dealerId,
+        startedByUserId: payload.startedByUserId,
         redis: redisClient,
         followUpSkipRemarkBases: dealerRemarkConfig.followUpSkipRemarkBases,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
         log,
         shouldStop: runCtx.shouldStop,
         waitIfPaused: runCtx.waitIfPaused,
@@ -702,7 +740,38 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       await publish(redisClient, SocketEvents.WORKFLOW_COMPLETED, payload.dealerId, {
         workflowRunId: payload.runId,
       });
-      await humanDelay(500, 1200);
+      await humanDelay(300, 600);
+    }
+
+    if (isLostInquiry) {
+      setAutomationOperationPace("lost_inquiry");
+      const settingsRow = await prisma.dealerAutomationSettings.findUnique({
+        where: { dealerId: payload.dealerId },
+        select: { ollamaModel: true },
+      });
+      await log("info", "Starting Lost Inquiry (Today's Follow Up) — stops when no Lost rows remain.");
+      await humanDelay(400, 800);
+      await runLostInquiry({
+        page,
+        runId: payload.runId,
+        dealerId: payload.dealerId,
+        startedByUserId: payload.startedByUserId,
+        redis: redisClient,
+        ollamaModel: settingsRow?.ollamaModel ?? null,
+        log,
+        shouldStop: runCtx.shouldStop,
+        waitIfPaused: runCtx.waitIfPaused,
+        signalManualIntervention,
+      });
+      await log("info", "Lost Inquiry complete — closing browser and marking run finished.");
+      await prisma.workflowRun.update({
+        where: { id: payload.runId },
+        data: { status: "COMPLETED", endedAt: new Date(), currentStep: "completed" },
+      });
+      await publish(redisClient, SocketEvents.WORKFLOW_COMPLETED, payload.dealerId, {
+        workflowRunId: payload.runId,
+      });
+      await humanDelay(300, 600);
     }
 
     if (payload.kind === "inquiry_fetch") {
@@ -711,7 +780,7 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
 
     const longRunningOp = isEnquiryTransfer;
 
-    if (!longRunningOp && !isFollowUpSkip) {
+    if (!longRunningOp && !isListExhaustionAutomation) {
       await prisma.workflowRun.update({
         where: { id: payload.runId },
         data: { status: "COMPLETED", endedAt: new Date() },
@@ -866,6 +935,10 @@ export async function runWorkflow(payload: ExecutePayload): Promise<void> {
       clearInterval(aliveLoop);
       aliveLoop = null;
     }
+    stopTitleRefresh?.();
+    stopTitleRefresh = null;
+    stopGeometryRefresh?.();
+    stopGeometryRefresh = null;
     if (!browserRetained) {
       detachInputGuard?.();
       unregisterActiveSession(payload.runId);

@@ -7,18 +7,19 @@ export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
 SERVICES="${*:-web api}"
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 echo "==> Building: $SERVICES"
-docker compose build --parallel $SERVICES
+$COMPOSE build --parallel $SERVICES
 
 echo "==> Recreating: $SERVICES"
-docker compose up -d --force-recreate --no-deps $SERVICES
+$COMPOSE up -d --force-recreate --no-deps $SERVICES
 
 if echo " ${SERVICES} " | grep -q ' api '; then
   echo "==> DB migrations (api container)"
-  docker compose exec -T api sh -c 'cd /repo && pnpm --filter @gdms/database exec prisma migrate deploy' 2>/dev/null || \
-    DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:54322/gdms?schema=public}" \
+  $COMPOSE exec -T api sh -c 'cd /repo && pnpm --filter @gdms/database exec prisma migrate deploy' 2>/dev/null || \
+    DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:32459/gdms?schema=public}" \
       pnpm --filter @gdms/database exec prisma migrate deploy
 fi
 
 echo "==> Done"
-docker compose ps $SERVICES
+$COMPOSE ps $SERVICES
