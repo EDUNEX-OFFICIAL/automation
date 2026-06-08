@@ -22,8 +22,8 @@ services:
     container_name: automation-api
     networks:
       - edge
-    ports:
-      - "4000:4000"
+    ports: !reset
+      - "127.0.0.1:4000:4000"
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gdms?schema=public
       REDIS_URL: redis://gdms-automation-redis:6379
@@ -146,8 +146,8 @@ services:
     container_name: automation-web
     networks:
       - edge
-    ports:
-      - "3000:3000"
+    ports: !reset
+      - "127.0.0.1:3000:3000"
     build:
       context: .
       dockerfile: apps/web/Dockerfile

@@ -1,7 +1,7 @@
 # Build on GitHub Actions, deploy to VPS over SSH.
 # Secrets: VPS_HOST, VPS_USER, VPS_SSH_KEY (or VPS_SSH_KEY_B64), optional VPS_PORT
 # Optional: DATABASE_URL — host-side Prisma migrate URL (127.0.0.1:5432/gdms)
-# Server must have /root/automation/.env (gitignored) with production values.
+# Server must have /srv/automation/.env (gitignored) with production values.
 name: Build and deploy VPS
 
 on:
@@ -103,7 +103,7 @@ jobs:
             bash -s -- "${DATABASE_URL:-}" <<'REMOTE'
           set -euo pipefail
           DB_URL_SECRET="${1:-}"
-          REPO="${HOME}/automation"
+          REPO="/srv/automation"
           COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.shared-postgres.yml"
 
           dotenv_export() {

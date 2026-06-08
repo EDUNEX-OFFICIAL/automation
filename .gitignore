@@ -17,3 +17,6 @@ android/**/.idea
 packages/database/prisma/migrations/**/migration_lock.toml.bak
 /data
 apps/automation-service/data/
+
+.pnpm-store/
+backups/

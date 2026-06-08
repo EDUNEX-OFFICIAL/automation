@@ -1,0 +1,8 @@
+admin.edunexservices.in {
+	encode gzip zstd
+	reverse_proxy cms-cms-gateway-1:80 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+}

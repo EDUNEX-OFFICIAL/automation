@@ -48,7 +48,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: /api-upstream
-        NEXT_PUBLIC_SOCKET_URL: http://187.127.100.121:4000
+        NEXT_PUBLIC_SOCKET_URL: https://bot.edunexservices.in
         API_UPSTREAM_URL: http://api:4000
 
 networks:
