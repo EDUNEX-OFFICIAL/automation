@@ -1,0 +1,170 @@
+# Build on GitHub Actions, deploy to VPS over SSH.
+# Secrets: VPS_HOST, VPS_USER, VPS_SSH_KEY (or VPS_SSH_KEY_B64), optional VPS_PORT
+# Optional: DATABASE_URL — host-side Prisma migrate URL (127.0.0.1:5432/gdms)
+# Server must have /root/automation/.env (gitignored) with production values.
+name: Build and deploy VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-automation-vps
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - name: Prisma generate
+        run: pnpm --filter @gdms/database exec prisma generate
+      - name: Build (monorepo)
+        env:
+          CI: "true"
+        run: pnpm turbo run build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sanitize VPS host/user/port
+        env:
+          RAW_HOST: ${{ secrets.VPS_HOST }}
+          RAW_USER: ${{ secrets.VPS_USER }}
+          RAW_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          H="$RAW_HOST"; U="$RAW_USER"; P="${RAW_PORT:-}"
+          H="${H//$'\r'/}"; H="${H//$'\n'/}"
+          U="${U//$'\r'/}"; U="${U//$'\n'/}"
+          P="${P//$'\r'/}"; P="${P//$'\n'/}"
+          H="${H#https://}"; H="${H#http://}"; H="${H%%/*}"
+          H="$(echo -n "$H" | xargs)"; U="$(echo -n "$U" | xargs)"; P="$(echo -n "$P" | xargs)"
+          if [ -z "$P" ]; then P="22"; fi
+          if [ -z "$H" ] || [ -z "$U" ]; then
+            echo "::error::VPS_HOST or VPS_USER empty"; exit 1
+          fi
+          echo "VPS_HOST_CLEAN=$H" >> "$GITHUB_ENV"
+          echo "VPS_USER_CLEAN=$U" >> "$GITHUB_ENV"
+          echo "VPS_PORT_CLEAN=$P" >> "$GITHUB_ENV"
+
+      - name: Load SSH key
+        env:
+          KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          KEY_RAW: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh; chmod 700 ~/.ssh
+          KEYFILE="$HOME/.ssh/vps_deploy.pem"; RAWTMP="$HOME/.ssh/vps_tmp.pem"
+          if [ -n "${KEY_B64:-}" ]; then echo "$KEY_B64" | tr -d '\n\r\t ' | base64 -d > "$RAWTMP"
+          elif [ -n "${KEY_RAW:-}" ]; then printf '%s\n' "$KEY_RAW" | tr -d '\r' > "$RAWTMP"
+          else echo "::error::Set VPS_SSH_KEY_B64 or VPS_SSH_KEY"; exit 1; fi
+          awk '/-----BEGIN/{found=1} found{print}' "$RAWTMP" > "$KEYFILE"; rm -f "$RAWTMP"
+          chmod 600 "$KEYFILE"
+          eval "$(ssh-agent -s)"; ssh-add "$KEYFILE"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=${SSH_AGENT_PID}" >> "$GITHUB_ENV"
+
+      - name: Deploy on VPS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh; touch ~/.ssh/known_hosts
+          ssh-keyscan -p "$VPS_PORT_CLEAN" -H "$VPS_HOST_CLEAN" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh_opts=(-p "$VPS_PORT_CLEAN" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
+          retry_ssh() {
+            local max_attempts=4 delay_seconds=5 attempt=1
+            while true; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "::error::Command failed after ${max_attempts} attempts: $*"; return 1
+              fi
+              echo "Attempt ${attempt}/${max_attempts} failed; retrying in ${delay_seconds}s..."
+              sleep "$delay_seconds"; attempt=$((attempt + 1))
+            done
+          }
+          if ! timeout 15 bash -lc "cat </dev/null >/dev/tcp/${VPS_HOST_CLEAN}/${VPS_PORT_CLEAN}" 2>/dev/null; then
+            echo "::error::Cannot reach ${VPS_HOST_CLEAN}:${VPS_PORT_CLEAN} from the GitHub runner."
+            exit 1
+          fi
+          retry_ssh ssh "${ssh_opts[@]}" "${VPS_USER_CLEAN}@${VPS_HOST_CLEAN}" \
+            env GH_TOKEN="$GH_TOKEN" GH_REPO="$GH_REPO" \
+            bash -s -- "${DATABASE_URL:-}" <<'REMOTE'
+          set -euo pipefail
+          DB_URL_SECRET="${1:-}"
+          REPO="${HOME}/automation"
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.shared-postgres.yml"
+
+          dotenv_export() {
+            local f="$1"
+            [ -f "$f" ] || return 0
+            local line key val
+            while IFS= read -r line || [ -n "$line" ]; do
+              line="${line//$'\r'/}"
+              line="${line#"${line%%[![:space:]]*}"}"
+              [[ -z "$line" ]] && continue
+              [[ "${line:0:1}" == "#" ]] && continue
+              [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+              key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+              _last="${val:$((${#val} - 1)):1}"
+              if [[ ${#val} -ge 2 && ${val:0:1} == '"' && "$_last" == '"' ]]; then
+                val="${val#\"}"; val="${val%\"}"
+              elif [[ ${#val} -ge 2 && ${val:0:1} == "'" && "$_last" == "'" ]]; then
+                val="${val#\'}"; val="${val%\'}"
+              fi
+              unset _last
+              export "${key}"="${val}"
+            done <"$f"
+          }
+
+          if [ ! -d "$REPO/.git" ]; then
+            mkdir -p "$(dirname "$REPO")"
+            git clone --depth 1 --branch main "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" "$REPO"
+          fi
+          cd "$REPO"
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          if [ ! -f "$REPO/.env" ]; then
+            echo "::error::Missing $REPO/.env on the VPS. Create it before deploy (see server setup)."
+            exit 1
+          fi
+          dotenv_export "$REPO/.env"
+          if [ -n "$DB_URL_SECRET" ]; then export DATABASE_URL="$DB_URL_SECRET"; fi
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::DATABASE_URL not set. Add GitHub secret DATABASE_URL or set it in $REPO/.env"
+            exit 1
+          fi
+
+          export DOCKER_BUILDKIT=1
+          export COMPOSE_DOCKER_CLI_BUILD=1
+          export GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          echo "Deploying automation @ ${GIT_COMMIT}"
+
+          $COMPOSE build --parallel web api worker automation ai
+          $COMPOSE up -d --remove-orphans --force-recreate
+
+          echo "=== Prisma migrate deploy (best-effort) ==="
+          if $COMPOSE exec -T api sh -c 'cd /repo && pnpm --filter @gdms/database exec prisma migrate deploy' 2>/dev/null; then
+            echo "Migrations applied."
+          else
+            echo "::warning::prisma migrate deploy failed or skipped — schema may already be synced via db push."
+          fi
+
+          echo "=== Health check ==="
+          curl -fsS http://127.0.0.1:4000/health
+          curl -fsSI http://127.0.0.1:3000 | head -1
+          $COMPOSE ps
+          REMOTE

@@ -1,0 +1,56 @@
+# Shared GreenCity Postgres — credentials from .env DATABASE_URL
+services:
+  postgres:
+    profiles: ["local-only"]
+
+  api:
+    depends_on: !reset
+      - redis
+    networks:
+      - edge
+      - green-city_default
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+  worker:
+    depends_on: !reset
+      redis:
+        condition: service_started
+      automation:
+        condition: service_healthy
+    networks:
+      - edge
+      - green-city_default
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+  automation:
+    depends_on: !reset
+      - redis
+    networks:
+      - edge
+      - green-city_default
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+  ai:
+    depends_on: !reset
+      - redis
+    networks:
+      - edge
+      - green-city_default
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /api-upstream
+        NEXT_PUBLIC_SOCKET_URL: http://187.127.100.121:4000
+        API_UPSTREAM_URL: http://api:4000
+
+networks:
+  green-city_default:
+    external: true
